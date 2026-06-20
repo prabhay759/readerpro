@@ -2082,6 +2082,9 @@ function App() {
   const [cmdFb, sCmdFb] = useState("");
   const [micOn, sMic] = useState(false);
   const [showHelp, sHelp] = useState(false);
+  const [drivingMode, sDriving] = useState(false);
+  const [wakeOn, sWakeOn] = useState(false);
+  const [cmdListening, sCmdListening] = useState(false);
 
   // Refs
   const rR = useRef(1);
@@ -2097,6 +2100,14 @@ function App() {
   const micR = useRef(false);
   const recR = useRef(null);
   const acR = useRef(null);
+  const wakeRecR = useRef(null);
+  const wakeOnR = useRef(false);
+  const awaitingCmdR = useRef(false);
+  const cmdTimeoutR = useRef(null);
+  const pausedForVisR = useRef(false);
+  const playFromR = useRef(null);
+  const doCmdR = useRef(null);
+  const apiKeyR = useRef('');
   const elR = useRef({});
   const saveT = useRef(null);
   const ttsModeR = useRef("browser");
@@ -2160,6 +2171,8 @@ function App() {
   useEffect(() => {
     ST.set(K.elname, elVoiceName);
   }, [elVoiceName]);
+  useEffect(() => { apiKeyR.current = apiKey; }, [apiKey]);
+  useEffect(() => { wakeOnR.current = wakeOn; }, [wakeOn]);
   useEffect(() => {
     if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     const lib = ST.get(K.lib, []);
@@ -2560,6 +2573,7 @@ function App() {
       }
     }, 80);
   }, [stopAll, playFromOpenAI, playFromElevenLabs, playFromBrowser]);
+  useEffect(() => { playFromR.current = playFrom; }, [playFrom]);
   const seek = useCallback(secs => {
     if (audioElR.current) {
       const a = audioElR.current;
@@ -2642,56 +2656,182 @@ function App() {
     sCmdFb(msg);
     setTimeout(() => sCmdFb(""), 2500);
   }, []);
+
+  // ── Speak text aloud via browser TTS (for car feedback) ──────────────────
+  const speakOut = useCallback((text, afterFn) => {
+    if (ttsModeR.current === 'browser') window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 1.05;
+    utt.volume = 1;
+    if (afterFn) utt.onend = afterFn;
+    window.speechSynthesis.speak(utt);
+  }, []);
+
+  // Pause audio so spoken feedback is audible, returns resume info
+  const pauseForSpeak = useCallback(() => {
+    const wasP = plR.current;
+    const resumeAt = wR.current >= 0 ? wR.current : 0;
+    if (wasP) {
+      if (ttsModeR.current === 'browser') {
+        window.speechSynthesis.cancel();
+        sPlay(false); sPause(false);
+        plR.current = false; paR.current = false;
+      } else if (audioElR.current) {
+        audioElR.current.pause();
+        sPlay(false); sPause(true);
+        plR.current = false; paR.current = true;
+      }
+    }
+    return { wasP, resumeAt };
+  }, []);
+
+  const resumeAfterSpeak = useCallback(({ wasP, resumeAt }) => {
+    if (!wasP) return;
+    if (ttsModeR.current === 'browser') {
+      playFromR.current?.(resumeAt);
+    } else if (audioElR.current) {
+      audioElR.current.play().catch(() => {});
+      sPlay(true); sPause(false);
+      plR.current = true; paR.current = false;
+    }
+  }, []);
+
+  // Get ~300-word context around current reading position
+  const getCtxForAI = useCallback(() => {
+    if (!acR.current) return '';
+    const wp = wpR.current;
+    const cur = wR.current >= 0 ? wR.current : 0;
+    const s = Math.max(0, cur - 250);
+    const e = Math.min(wp.length - 1, cur + 40);
+    return acR.current.text.slice(wp[s]?.s ?? 0, wp[e]?.e ?? acR.current.text.length);
+  }, []);
+
+  // Rewind to start of previous sentence
+  const repeatThat = useCallback(() => {
+    const wp = wpR.current;
+    const text = acR.current?.text ?? '';
+    const cur = Math.max(0, wR.current >= 0 ? wR.current : 0);
+    const beforeCur = text.slice(0, wp[cur]?.s ?? 0);
+    const ends = [...beforeCur.matchAll(/[.!?]["']?\s+/g)];
+    if (ends.length >= 2) {
+      const prev = ends[ends.length - 2];
+      const wi = wp.findIndex(w => w.s >= prev.index + prev[0].length);
+      if (wi >= 0) { playFromR.current?.(wi); return; }
+    } else if (ends.length === 1) {
+      playFromR.current?.(0); return;
+    }
+    playFromR.current?.(Math.max(0, cur - Math.round(15 * WPS)));
+  }, []);
+
+  // Jump to next chapter break in text
+  const skipChapter = useCallback(() => {
+    const wp = wpR.current;
+    const text = acR.current?.text ?? '';
+    const cur = wR.current >= 0 ? wR.current : 0;
+    const fromChar = wp[Math.min(cur + 1, wp.length - 1)]?.s ?? 0;
+    const rest = text.slice(fromChar);
+    const idx = rest.search(/\n\s*\n\s*(?:chapter|part|section|epilogue|prologue|\d+\.?\s)/i);
+    const fallback = rest.search(/\n\s*\n\s*\n/);
+    const pos = idx >= 0 ? idx : fallback;
+    if (pos >= 0) {
+      const wi = wp.findIndex(w => w.s >= fromChar + pos);
+      if (wi >= 0) { playFromR.current?.(wi); fb('⏭ Next chapter'); return; }
+    }
+    fb('❌ No chapter break found');
+  }, [fb]);
+
+  // Call AI and read the response aloud, pausing and resuming the book
+  const aiSpeak = useCallback(async (prompt, sysPrompt) => {
+    const key = apiKeyR.current || ST.get(K.key, '');
+    if (!key) { speakOut('No AI key configured'); return; }
+    const info = pauseForSpeak();
+    speakOut('Getting answer');
+    try {
+      const ctx = getCtxForAI();
+      const resp = await callAI(
+        [{ role: 'user', content: prompt }],
+        sysPrompt || `You are a reading companion for a driver. Recent text:\n"""\n${ctx}\n"""\nBe brief — 2 to 3 sentences, conversational, easy to follow by ear.`,
+        key
+      );
+      const clean = resp.replace(/\*\*/g, '').replace(/\*/g, '').trim();
+      speakOut(clean, () => resumeAfterSpeak(info));
+    } catch (e) {
+      speakOut('AI error, sorry');
+      resumeAfterSpeak(info);
+    }
+  }, [speakOut, pauseForSpeak, getCtxForAI, resumeAfterSpeak]);
+
   const doCmd = useCallback(raw => {
-    const c = raw.toLowerCase();
+    const c = raw.toLowerCase().trim();
     if (/\bback\b/.test(c) && /30|thirty/.test(c)) {
-      seek(-30);
-      fb("⏪ Back 30s");
+      seek(-30); fb("⏪ Back 30s");
     } else if (/\bback\b/.test(c)) {
-      seek(-10);
-      fb("⏪ Back 10s");
+      seek(-10); fb("⏪ Back 10s");
     } else if (/\b(forward|skip)\b/.test(c) && /30|thirty/.test(c)) {
-      seek(30);
-      fb("⏩ Fwd 30s");
+      seek(30); fb("⏩ Fwd 30s");
     } else if (/\b(forward|skip)\b/.test(c)) {
-      seek(10);
-      fb("⏩ Fwd 10s");
+      seek(10); fb("⏩ Fwd 10s");
     } else if (/\bpause\b/.test(c) && plR.current) {
-      toggle();
-      fb("⏸ Paused");
-    } else if (/\b(play|resume)\b/.test(c) && paR.current) {
-      toggle();
-      fb("▶ Playing");
+      toggle(); fb("⏸ Paused");
+    } else if (/\b(play|resume|continue)\b/.test(c) && paR.current) {
+      toggle(); fb("▶ Playing");
     } else if (/\bstop\b/.test(c)) {
-      stopAll();
-      fb("⏹ Stopped");
+      stopAll(); fb("⏹ Stopped");
+    } else if (/\b(repeat|again|say that)\b/.test(c)) {
+      repeatThat(); fb("🔄 Repeating");
     } else if (/faster|speed up/.test(c)) {
       const r = Math.min(3, rR.current + 0.25);
-      changeRate(r);
-      fb(`⬆ ${r.toFixed(2)}×`);
+      changeRate(r); fb(`⬆ ${r.toFixed(2)}×`);
     } else if (/slower|slow down/.test(c)) {
       const r = Math.max(0.5, rR.current - 0.25);
-      changeRate(r);
-      fb(`⬇ ${r.toFixed(2)}×`);
+      changeRate(r); fb(`⬇ ${r.toFixed(2)}×`);
+    } else if (/\bspeed\b/.test(c) && /\d/.test(c)) {
+      const nm = c.match(/(\d+(?:[.,]\d+)?)/);
+      if (nm) {
+        const r = Math.max(0.5, Math.min(3, parseFloat(nm[1].replace(',', '.'))));
+        changeRate(r); fb(`⚡ ${r}×`);
+      }
     } else if (/restart|beginning/.test(c)) {
-      playFrom(0);
-      fb("⏮ Restart");
+      playFrom(0); fb("⏮ Restart");
+    } else if (/\b(next chapter|skip chapter|chapter)\b/.test(c)) {
+      skipChapter();
+    } else if (/\b(how long|time left|how much left|remaining|minutes left)\b/.test(c)) {
+      const wi = wR.current >= 0 ? wR.current : 0;
+      const rem = Math.max(0, (wpR.current.length - wi) / (WPS * rR.current));
+      const mins = Math.floor(rem / 60);
+      const secs = Math.floor(rem % 60);
+      const msg = mins > 0 ? `${mins} minute${mins !== 1 ? 's' : ''} and ${secs} seconds left` : `${secs} seconds left`;
+      fb(`⏱ ${mins}m ${secs}s left`);
+      const info = pauseForSpeak();
+      speakOut(msg, () => resumeAfterSpeak(info));
+    } else if (/\b(where am i|my progress|how far|what percent|how much have i)\b/.test(c)) {
+      const wi = wR.current >= 0 ? wR.current : 0;
+      const pct = wpR.current.length > 0 ? Math.round(wi / wpR.current.length * 100) : 0;
+      fb(`📍 ${pct}%`);
+      const info = pauseForSpeak();
+      speakOut(`You are ${pct} percent through`, () => resumeAfterSpeak(info));
     } else if (/\bexplain\b/.test(c)) {
-      sAI(true);
-      fb("🤖 AI opened");
+      fb("🤖 Explaining…");
+      aiSpeak("In 2 to 3 sentences, explain the key idea of what was just read.");
+    } else if (/\bsummar/.test(c)) {
+      fb("📋 Summarizing…");
+      aiSpeak("Summarize what I just read in 3 sentences. Be conversational, as if talking to someone driving a car.");
+    } else if (/\bdefine\b/.test(c) || /what does .+ mean/.test(c)) {
+      const wm = c.match(/define (\w+)/) || c.match(/what does (\w+) mean/);
+      if (wm) {
+        fb(`📖 "${wm[1]}"`);
+        aiSpeak(`Define the word "${wm[1]}" in one short, clear sentence.`, "You are a concise dictionary assistant. Give only the definition, no extra commentary.");
+      } else { fb("❓ Define what?"); }
     } else if (/\bbookmark\b/.test(c)) {
-      addBM();
-      fb("🔖 Bookmarked");
+      addBM(); fb("🔖 Bookmarked");
     } else {
-      fb(`❓ "${raw.slice(0, 30)}"`);
+      fb(`❓ "${raw.slice(0, 25)}"`);
     }
-  }, [seek, toggle, stopAll, changeRate, playFrom, addBM, fb]);
+  }, [seek, toggle, stopAll, changeRate, playFrom, addBM, fb, repeatThat, skipChapter, pauseForSpeak, speakOut, resumeAfterSpeak, aiSpeak]);
+  useEffect(() => { doCmdR.current = doCmd; }, [doCmd]);
   const toggleMic = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      alert("Voice commands need Chrome.");
-      return;
-    }
+    if (!SR) { alert("Voice commands need Chrome."); return; }
     if (micR.current) {
       recR.current?.stop();
       recR.current = null;
@@ -2702,26 +2842,76 @@ function App() {
       r.continuous = true;
       r.interimResults = false;
       r.lang = "en-US";
-      r.onresult = e => doCmd(e.results[e.results.length - 1][0].transcript);
-      r.onerror = () => {
-        sMic(false);
-        micR.current = false;
-      };
-      r.onend = () => {
-        if (micR.current) try {
-          r.start();
-        } catch (e) {}
-      };
+      r.onresult = e => doCmdR.current?.(e.results[e.results.length - 1][0].transcript);
+      r.onerror = () => { sMic(false); micR.current = false; };
+      r.onend = () => { if (micR.current) try { r.start(); } catch(er) {} };
       recR.current = r;
-      try {
-        r.start();
-        sMic(true);
-        micR.current = true;
-      } catch (e) {
-        alert("Mic error.");
-      }
+      try { r.start(); sMic(true); micR.current = true; } catch(e) { alert("Mic error."); }
     }
-  }, [doCmd]);
+  }, []);
+
+  // ── Wake word recognizer ("Hey Book" → listen for command) ───────────────
+  const startWakeRec = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const r = new SR();
+    r.continuous = true;
+    r.interimResults = false;
+    r.lang = "en-US";
+    r.onresult = e => {
+      const t = e.results[e.results.length - 1][0].transcript;
+      const lc = t.toLowerCase();
+      const hasWake = /hey book|ok book|hey books/.test(lc);
+      if (hasWake && !awaitingCmdR.current) {
+        awaitingCmdR.current = true;
+        sCmdListening(true);
+        speakOut("Ready");
+        clearTimeout(cmdTimeoutR.current);
+        cmdTimeoutR.current = setTimeout(() => {
+          awaitingCmdR.current = false;
+          sCmdListening(false);
+        }, 5000);
+      } else if (awaitingCmdR.current) {
+        awaitingCmdR.current = false;
+        sCmdListening(false);
+        clearTimeout(cmdTimeoutR.current);
+        doCmdR.current?.(t);
+      }
+    };
+    r.onerror = () => {};
+    r.onend = () => { if (wakeOnR.current) try { r.start(); } catch(er) {} };
+    wakeRecR.current = r;
+    try { r.start(); } catch(er) {}
+  }, [speakOut]);
+
+  const toggleWake = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Wake word needs Chrome."); return; }
+    if (wakeOnR.current) {
+      clearTimeout(cmdTimeoutR.current);
+      wakeRecR.current?.stop();
+      wakeRecR.current = null;
+      wakeOnR.current = false;
+      awaitingCmdR.current = false;
+      sWakeOn(false);
+      sCmdListening(false);
+    } else {
+      startWakeRec();
+      wakeOnR.current = true;
+      sWakeOn(true);
+    }
+  }, [startWakeRec]);
+
+  const toggleDriving = useCallback(() => {
+    sDriving(d => {
+      const next = !d;
+      if (next && !wakeOnR.current) {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SR) { startWakeRec(); wakeOnR.current = true; sWakeOn(true); }
+      }
+      return next;
+    });
+  }, [startWakeRec]);
   useEffect(() => {
     if (view !== "reader") return;
     const h = e => {
@@ -2746,6 +2936,27 @@ function App() {
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [view, toggle, seek, changeRate, addBM]);
+  // ── Auto-pause when phone call or screen lock interrupts ──────────────────
+  useEffect(() => {
+    const onVis = () => {
+      if (document.hidden && plR.current) {
+        pausedForVisR.current = true;
+        if (audioElR.current) { audioElR.current.pause(); }
+        else { window.speechSynthesis.pause(); }
+        sPlay(false); sPause(true);
+        plR.current = false; paR.current = true;
+      } else if (!document.hidden && pausedForVisR.current && paR.current) {
+        pausedForVisR.current = false;
+        if (audioElR.current) { audioElR.current.play().catch(() => {}); }
+        else { window.speechSynthesis.resume(); }
+        sPlay(true); sPause(false);
+        plR.current = true; paR.current = false;
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
   useEffect(() => {
     elR.current[wIdx]?.scrollIntoView({
       behavior: "smooth",
@@ -3088,7 +3299,39 @@ function App() {
       fontSize: 19,
       lineHeight: 2.1
     }
-  }, renderText())), /*#__PURE__*/React.createElement("button", {
+  }, renderText())), drivingMode && /*#__PURE__*/React.createElement("div", {
+    style: { position: "fixed", inset: 0, background: C.bg, zIndex: 75, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "space-between", padding: "24px 20px 40px" }
+  },
+    /*#__PURE__*/React.createElement("div", { style: { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+      /*#__PURE__*/React.createElement("div", { style: { fontFamily: "sans-serif", fontSize: 11, color: C.red, fontWeight: 800, letterSpacing: 2 } }, "🚗 DRIVING MODE"),
+      /*#__PURE__*/React.createElement("div", { style: { fontFamily: "sans-serif", fontSize: 22, color: C.acc, fontWeight: 800 } }, Math.round(pct) + "%"),
+      /*#__PURE__*/React.createElement("button", { onClick: toggleDriving, style: { background: C.surfB, border: `1px solid ${C.bdr}`, borderRadius: 8, color: C.muted, cursor: "pointer", fontFamily: "sans-serif", fontSize: 12, padding: "6px 14px", fontWeight: 700 } }, "EXIT")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px 8px", maxWidth: 600, width: "100%" } },
+      /*#__PURE__*/React.createElement("div", { style: { fontFamily: "'Georgia',serif", fontSize: 28, lineHeight: 1.8, color: C.txt, textAlign: "center" } },
+        (() => {
+          if (!active || wIdx < 0) return "Tap ▶ to start reading";
+          const text = active.text, wp = active.wpos;
+          let s = 0, en = wp.length - 1;
+          for (let i = wIdx - 1; i >= 0; i--) { if (/[.!?]["']?$/.test(text.slice(wp[i].s, wp[i].e))) { s = i + 1; break; } }
+          for (let i = wIdx; i < wp.length && i - wIdx < 40; i++) { if (/[.!?]["']?$/.test(text.slice(wp[i].s, wp[i].e))) { en = i; break; } }
+          return text.slice(wp[s]?.s ?? 0, wp[en]?.e ?? text.length);
+        })()
+      )
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { marginBottom: 24, textAlign: "center" } },
+      cmdListening
+        ? /*#__PURE__*/React.createElement("div", { style: { fontFamily: "sans-serif", fontSize: 14, color: C.acc, letterSpacing: 1, animation: "pulseFx 1s ease infinite" } }, "🎤 LISTENING FOR COMMAND…")
+        : wakeOn
+        ? /*#__PURE__*/React.createElement("div", { style: { fontFamily: "sans-serif", fontSize: 12, color: C.muted, letterSpacing: 1 } }, "Say \"Hey Book\" to command")
+        : /*#__PURE__*/React.createElement("div", { style: { fontFamily: "sans-serif", fontSize: 12, color: C.muted } }, "Tap HB below to enable voice")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 20, width: "100%", justifyContent: "center" } },
+      /*#__PURE__*/React.createElement("button", { onClick: () => seek(-30), style: { width: 90, height: 90, borderRadius: 45, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 15, fontWeight: 700, flexShrink: 0 } }, "−30s"),
+      /*#__PURE__*/React.createElement("button", { onClick: toggle, style: { width: 120, height: 120, borderRadius: 60, background: C.acc, border: "none", color: C.bg, cursor: "pointer", fontSize: 48, flexShrink: 0, boxShadow: `0 0 32px ${C.accGlow}` } }, playing ? "⏸" : "▶"),
+      /*#__PURE__*/React.createElement("button", { onClick: () => seek(30), style: { width: 90, height: 90, borderRadius: 45, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 15, fontWeight: 700, flexShrink: 0 } }, "+30s")
+    )
+  ), /*#__PURE__*/React.createElement("button", {
     onClick: () => sAI(true),
     style: {
       position: "fixed",
@@ -3149,7 +3392,7 @@ function App() {
     style: {
       color: C.txt
     }
-  }, "Voice:"), " back·forward·pause·play·faster·slower·restart·explain·bookmark", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+  }, "Voice (🎤 direct):"), " back·forward·pause·play·stop·faster·slower·restart·bookmark", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", { style: { color: C.txt } }, "Voice+:"), " repeat · speed 1.5 · next chapter · how long left · where am I", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", { style: { color: C.txt } }, "AI voice:"), " explain · summarize · define [word]", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", { style: { color: C.txt } }, "Wake (HB):"), " say \"Hey Book\" then your command · 🚗=driving mode", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
     style: {
       color: C.txt
     }
@@ -3273,16 +3516,41 @@ function App() {
       animation: micOn ? "pulseFx 1.4s ease infinite" : "none"
     }
   }, "🎤"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: toggleWake,
+    w: 36,
+    h: 36,
+    title: "Wake word: say 'Hey Book' to command",
+    style: {
+      background: wakeOn ? "#0A180A" : "none",
+      borderColor: cmdListening ? C.acc : wakeOn ? C.grn : C.bdr,
+      color: cmdListening ? C.acc : wakeOn ? C.grn : C.muted,
+      animation: cmdListening ? "pulseFx 1s ease infinite" : "none",
+      fontSize: 11,
+      fontFamily: "sans-serif",
+      fontWeight: 800
+    }
+  }, "HB"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: toggleDriving,
+    w: 36,
+    h: 36,
+    title: "Driving mode — big buttons + wake word",
+    style: {
+      background: drivingMode ? "#1A0808" : "none",
+      borderColor: drivingMode ? C.red : C.bdr,
+      color: drivingMode ? C.red : C.muted,
+      fontSize: 15
+    }
+  }, "🚗"), /*#__PURE__*/React.createElement(Btn, {
     onClick: () => sHelp(s => !s),
     w: 36,
     h: 36,
     active: showHelp,
     muted: true
-  }, "?")), micOn && /*#__PURE__*/React.createElement("div", {
+  }, "?")), (micOn || wakeOn) && /*#__PURE__*/React.createElement("div", {
     style: {
       fontFamily: "sans-serif",
       fontSize: 11,
-      color: C.red,
+      color: cmdListening ? C.acc : C.red,
       letterSpacing: 1,
       display: "flex",
       alignItems: "center",
@@ -3294,10 +3562,10 @@ function App() {
       width: 6,
       height: 6,
       borderRadius: "50%",
-      background: C.red,
+      background: cmdListening ? C.acc : C.red,
       animation: "pulseFx 1s ease infinite"
     }
-  }), "LISTENING")), aiOpen && /*#__PURE__*/React.createElement(AIPanel, {
+  }), cmdListening ? "COMMAND MODE — SPEAK NOW" : wakeOn ? "WAKE: SAY \"HEY BOOK\"" : "LISTENING")), aiOpen && /*#__PURE__*/React.createElement(AIPanel, {
     onClose: () => {
       sAI(false);
       sSelTxt("");
