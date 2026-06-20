@@ -2051,6 +2051,43 @@ function Library({
   }))));
 }
 
+// ── Connection status banner ──────────────────────────────────────────────────
+function ConnBar({ status, onClose }) {
+  const done = status.el !== null && status.ai !== null;
+  const dot = ok => React.createElement("span", {
+    style: {
+      display: "inline-block", width: 7, height: 7, borderRadius: "50%",
+      background: ok === null ? "#666" : ok ? "#4ADE80" : "#F87171",
+      boxShadow: ok === null ? "none" : ok ? "0 0 5px #4ADE80" : "0 0 5px #F87171",
+      flexShrink: 0
+    }
+  });
+  const label = (ok, name) => React.createElement("span", {
+    style: {
+      display: "flex", alignItems: "center", gap: 5,
+      color: ok === null ? "#666" : ok ? "#4ADE80" : "#F87171",
+      fontWeight: ok === false ? 700 : 400
+    }
+  }, dot(ok), name, ok === false ? " ✗" : ok === true ? " ✓" : "…");
+  return React.createElement("div", {
+    style: {
+      position: "fixed", top: 0, left: 0, right: 0, zIndex: 200,
+      background: "#0C0C0C", borderBottom: "1px solid #252525",
+      padding: "5px 14px", display: "flex", alignItems: "center",
+      gap: 14, fontFamily: "sans-serif", fontSize: 11, letterSpacing: 0.3
+    }
+  },
+    !done && React.createElement(Spin, null),
+    React.createElement("span", { style: { color: "#555", textTransform: "uppercase", fontSize: 10, letterSpacing: 1 } }, "Services"),
+    label(status.el, "ElevenLabs"),
+    label(status.ai, "AI"),
+    done && React.createElement("button", {
+      onClick: onClose,
+      style: { marginLeft: "auto", background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }
+    }, "×")
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function App() {
   const [view, sView] = useState("library");
@@ -2088,6 +2125,8 @@ function App() {
   const [drivingMode, sDriving] = useState(false);
   const [wakeOn, sWakeOn] = useState(false);
   const [cmdListening, sCmdListening] = useState(false);
+  const [connStatus, sConnStatus] = useState({ el: null, ai: null });
+  const [showConnBar, sShowConnBar] = useState(false);
 
   // Refs
   const rR = useRef(1);
@@ -2186,8 +2225,10 @@ function App() {
     const k = ST.get(K.key, "") || (_NL_AI_KEY !== "NETLIFY_INJECTED_AI_KEY" ? _NL_AI_KEY : "");
     if (k) {
       sApiKey(k);
+      apiKeyR.current = k;
       if (!ST.get(K.key, "")) ST.set(K.key, k);
     }
+    setTimeout(checkConn, 150);
     return () => {
       window.speechSynthesis.cancel();
       recR.current?.stop();
@@ -2209,6 +2250,23 @@ function App() {
     };
     load();
     window.speechSynthesis.onvoiceschanged = load;
+  }, []);
+  const checkConn = useCallback(async () => {
+    sShowConnBar(true);
+    sConnStatus({ el: null, ai: null });
+    const tryEl = async () => {
+      if (!elKeyR.current) return false;
+      try { const r = await fetch("https://api.elevenlabs.io/v1/models", { headers: { "xi-api-key": elKeyR.current } }); return r.ok; }
+      catch { return false; }
+    };
+    const tryAI = async () => {
+      if (!apiKeyR.current) return false;
+      try { const r = await fetch("https://aki.io/v1/models", { headers: { "Authorization": `Bearer ${apiKeyR.current}` } }); return r.ok; }
+      catch { return false; }
+    };
+    const [el, ai] = await Promise.all([tryEl(), tryAI()]);
+    sConnStatus({ el, ai });
+    if (el && ai) setTimeout(() => sShowConnBar(false), 3500);
   }, []);
   const saveProg = useCallback((id, idx) => {
     clearTimeout(saveT.current);
@@ -3024,7 +3082,7 @@ function App() {
     const e = Math.min(wp.length - 1, cur + 40);
     return active.text.slice(wp[s]?.s ?? 0, wp[e]?.e ?? active.text.length);
   };
-  if (view === "library") return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Library, {
+  if (view === "library") return /*#__PURE__*/React.createElement(React.Fragment, null, showConnBar && /*#__PURE__*/React.createElement(ConnBar, { status: connStatus, onClose: () => sShowConnBar(false) }), /*#__PURE__*/React.createElement(Library, {
     books: books,
     progMap: progMap,
     onOpen: openBook,
@@ -3052,7 +3110,7 @@ function App() {
       display: "flex",
       flexDirection: "column"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, showConnBar && /*#__PURE__*/React.createElement(ConnBar, { status: connStatus, onClose: () => sShowConnBar(false) }), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "sticky",
       top: 0,
