@@ -1,5 +1,7 @@
 [build]
-  # Injects the eleven_api_key Netlify environment variable into index.html at build time.
-  # Set the variable in: Netlify dashboard → Site → Environment variables → eleven_api_key
-  command = "node -e \"const fs=require('fs');let h=fs.readFileSync('index.html','utf8');const k=process.env.eleven_api_key||'';h=h.replace('NETLIFY_INJECTED_EL_KEY',k);fs.writeFileSync('index.html',h);console.log('ElevenLabs key injected:',k?'yes':'not set');\""
+  # Injects Netlify environment variables into index.html at build time.
+  # Set variables in: Netlify dashboard → Site → Environment variables
+  #   eleven_api_key  → ElevenLabs voice clone key
+  #   ai_api_key      → aki.io AI companion key
+  command = "node -e \"const fs=require('fs');let h=fs.readFileSync('index.html','utf8');const k=process.env.eleven_api_key||'';h=h.replace('NETLIFY_INJECTED_EL_KEY',k);const a=process.env.ai_api_key||'';h=h.replace('NETLIFY_INJECTED_AI_KEY',a);fs.writeFileSync('index.html',h);console.log('ElevenLabs:',k?'yes':'not set','| AI:',a?'yes':'not set');\""
   publish = "."

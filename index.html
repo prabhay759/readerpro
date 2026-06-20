@@ -197,8 +197,9 @@ const SAMPLE_TEXT = `The secret of getting ahead is getting started. The best ti
 It does not matter how slowly you go as long as you do not stop. Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time. Success is not final; failure is not fatal — it is the courage to continue that counts.
 
 You are never too old to set a new goal or to dream a new dream. The future belongs to those who believe in the beauty of their dreams. Know that there is something inside you that is greater than any obstacle.`;
-// Replaced at Netlify build time — do not edit this string
+// Replaced at Netlify build time — do not edit these strings
 const _NL_ELEVEN_KEY = "NETLIFY_INJECTED_EL_KEY";
+const _NL_AI_KEY = "NETLIFY_INJECTED_AI_KEY";
 const uid = () => Math.random().toString(36).slice(2, 10);
 const pFmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const tAgo = iso => {
@@ -251,24 +252,24 @@ const ST = {
   }
 };
 const callAI = async (messages, system, apiKey) => {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await fetch("https://aki.io/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-allow-browser": "true"
+      "Authorization": `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: "claude-3-5-sonnet-20241022",
       max_tokens: 1000,
-      system,
-      messages
+      messages: [
+        ...(system ? [{ role: "system", content: system }] : []),
+        ...messages
+      ]
     })
   });
   const d = await r.json();
   if (d.error) throw new Error(d.error.message);
-  return d.content.find(b => b.type === "text")?.text ?? "";
+  return d.choices[0].message.content ?? "";
 };
 const readPDF = async file => {
   if (!window.pdfjsLib) throw new Error("PDF reader not ready yet.");
@@ -2182,9 +2183,10 @@ function App() {
     for (const b of lib) pm[b.id] = ST.get(K.prog(b.id), 0);
     sBooks(lib);
     sProg(pm);
-    const k = ST.get(K.key, "");
+    const k = ST.get(K.key, "") || (_NL_AI_KEY !== "NETLIFY_INJECTED_AI_KEY" ? _NL_AI_KEY : "");
     if (k) {
       sApiKey(k);
+      if (!ST.get(K.key, "")) ST.set(K.key, k);
     }
     return () => {
       window.speechSynthesis.cancel();
