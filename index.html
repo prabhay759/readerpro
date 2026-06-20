@@ -1,0 +1,3338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="theme-color" content="#0B1219"/>
+<meta name="apple-mobile-web-app-title" content="BookLens"/>
+<meta name="application-name" content="BookLens"/>
+<title>BookLens Pro</title>
+<link rel="manifest" id="pwa-manifest"/>
+<script>
+// ── PWA: generate icon + manifest + service worker ─────────────────────────
+(function(){
+  // Draw the app icon on a canvas
+  function rRect(ctx,x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+  function makeIcon(size){
+    const c=document.createElement("canvas");
+    c.width=size;c.height=size;
+    const ctx=c.getContext("2d");
+    ctx.fillStyle="#0B1219";
+    rRect(ctx,0,0,size,size,size*0.22);
+    ctx.fill();
+    ctx.strokeStyle="#D4A254";
+    ctx.lineWidth=size*0.04;
+    rRect(ctx,size*0.06,size*0.06,size*0.88,size*0.88,size*0.18);
+    ctx.stroke();
+    ctx.font=`${size*0.52}px serif`;
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+    ctx.fillText("📚",size/2,size/2+size*0.04);
+    return c.toDataURL("image/png");
+  }
+
+  const icon192=makeIcon(192);
+  const icon512=makeIcon(512);
+
+  // Apple touch icon (iOS home screen)
+  const appleIcon=document.createElement("link");
+  appleIcon.rel="apple-touch-icon";
+  appleIcon.href=icon192;
+  document.head.appendChild(appleIcon);
+
+  // Web App Manifest (enables "Add to Home Screen" install prompt on Android/Chrome)
+  const manifest={
+    name:"BookLens Pro",
+    short_name:"BookLens",
+    description:"Your AI-powered audio library with seek, bookmarks and AI companion",
+    start_url:".",
+    display:"standalone",
+    background_color:"#0B1219",
+    theme_color:"#0B1219",
+    orientation:"portrait-primary",
+    categories:["books","education","productivity"],
+    icons:[
+      {src:icon192,sizes:"192x192",type:"image/png",purpose:"any maskable"},
+      {src:icon512,sizes:"512x512",type:"image/png",purpose:"any maskable"},
+    ],
+  };
+  const mb=new Blob([JSON.stringify(manifest)],{type:"application/manifest+json"});
+  document.getElementById("pwa-manifest").href=URL.createObjectURL(mb);
+
+  // ── Cache-warming: pre-fetch CDN assets into browser cache ─────────────────
+  // This ensures all scripts load instantly on repeat visits (feels offline-ready)
+  const CDN=[
+    "https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js",
+    "https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
+  ];
+  // After page loads, warm the cache so next visit is instant even on slow connections
+  window.addEventListener("load",()=>{
+    if("caches" in window){
+      caches.open("bl-cdnv1").then(c=>
+        CDN.forEach(url=>c.add(url).catch(()=>{}))
+      );
+    }
+    // Also pre-fetch via link hints for faster repeat loads
+    CDN.forEach(url=>{
+      const l=document.createElement("link");
+      l.rel="prefetch"; l.href=url;
+      document.head.appendChild(l);
+    });
+  });
+})();
+</script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" crossorigin></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0B1219;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
+input[type=range]{width:100%;cursor:pointer;accent-color:#D4A254}
+textarea,input,select{-webkit-appearance:none}
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-track{background:#0B1219}
+::-webkit-scrollbar-thumb{background:#1D2E44;border-radius:3px}
+::selection{background:#D4A25455}
+@keyframes pulseFx{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spinFx{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="err-overlay" style="display:none;position:fixed;inset:0;background:#0d0000;color:#ff7070;font-family:monospace;font-size:13px;padding:24px;overflow:auto;z-index:9999">
+  <div style="max-width:600px">
+    <div style="color:#ff4444;font-size:18px;font-weight:bold;margin-bottom:16px">⚠️ Loading Error</div>
+    <div style="color:#ffaa70;margin-bottom:8px">Please screenshot this and send it back:</div>
+    <div id="err-msg" style="background:#1a0000;padding:16px;border-radius:8px;white-space:pre-wrap;word-break:break-all"></div>
+  </div>
+</div>
+<script>
+window.onerror = function(msg, src, line, col, err) {
+  var o = document.getElementById('err-overlay');
+  var m = document.getElementById('err-msg');
+  if (o && m) {
+    m.textContent = 'Message: ' + msg + '\nSource:  ' + src + '\nLine:    ' + line + ', Col: ' + col + '\n\nStack:\n' + (err && err.stack ? err.stack : 'none');
+    o.style.display = 'block';
+  }
+  return true;
+};
+window.onunhandledrejection = function(e) {
+  var o = document.getElementById('err-overlay');
+  var m = document.getElementById('err-msg');
+  if (o && m) {
+    m.textContent = 'Unhandled Promise:\n' + (e.reason && e.reason.stack ? e.reason.stack : String(e.reason));
+    o.style.display = 'block';
+  }
+};
+</script>
+<script>
+const {
+  useState,
+  useEffect,
+  useRef,
+  useCallback
+} = React;
+const C = {
+  bg: "#0B1219",
+  surf: "#111C28",
+  surfB: "#172336",
+  bdr: "#1D2E44",
+  txt: "#E8DECE",
+  muted: "#5C5244",
+  pastTxt: "#3B3226",
+  acc: "#D4A254",
+  accDim: "#7A5C25",
+  accGlow: "#D4A25422",
+  ai: "#5B8DD9",
+  aiBg: "#0A1428",
+  aiBdr: "#1A3060",
+  grn: "#3D7A55",
+  grnBg: "#0A1812",
+  grnBdr: "#1C3E2A",
+  red: "#B84040"
+};
+const WPS = 2.5,
+  RATES = [0.75, 1, 1.25, 1.5, 2];
+const OAI_VOICES = [{
+  id: "nova",
+  label: "Nova",
+  desc: "Warm & natural (recommended)"
+}, {
+  id: "shimmer",
+  label: "Shimmer",
+  desc: "Soft & expressive"
+}, {
+  id: "alloy",
+  label: "Alloy",
+  desc: "Balanced & clear"
+}, {
+  id: "echo",
+  label: "Echo",
+  desc: "Deep & authoritative"
+}, {
+  id: "fable",
+  label: "Fable",
+  desc: "Storytelling tone"
+}, {
+  id: "onyx",
+  label: "Onyx",
+  desc: "Rich & deep"
+}];
+const SAMPLE_TITLE = "Getting Started";
+const SAMPLE_TEXT = `The secret of getting ahead is getting started. The best time to plant a tree was twenty years ago. The second best time is now. Do not wait to strike till the iron is hot, but make it hot by striking.
+
+It does not matter how slowly you go as long as you do not stop. Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time. Success is not final; failure is not fatal — it is the courage to continue that counts.
+
+You are never too old to set a new goal or to dream a new dream. The future belongs to those who believe in the beauty of their dreams. Know that there is something inside you that is greater than any obstacle.`;
+const uid = () => Math.random().toString(36).slice(2, 10);
+const pFmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const tAgo = iso => {
+  const d = (Date.now() - new Date(iso)) / 1000;
+  if (d < 60) return "just now";
+  if (d < 3600) return `${Math.floor(d / 60)}m ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
+  return `${Math.floor(d / 86400)}d ago`;
+};
+const pWords = t => {
+  const o = [];
+  const re = /\S+/g;
+  let m;
+  while ((m = re.exec(t)) !== null) o.push({
+    w: m[0],
+    s: m.index,
+    e: m.index + m[0].length
+  });
+  return o;
+};
+const K = {
+  lib: "bl:lib",
+  text: id => `bl:tx:${id}`,
+  prog: id => `bl:pg:${id}`,
+  bm: id => `bl:bk:${id}`,
+  key: "bl:apikey",
+  oaikey: "bl:oaikey",
+  ttsmode: "bl:ttsmode",
+  oaivoice: "bl:oaivoice",
+  elkey: "bl:elkey",
+  elvid: "bl:elvid",
+  elname: "bl:elname"
+};
+const ST = {
+  get(k, fb = null) {
+    try {
+      const v = localStorage.getItem(k);
+      return v != null ? JSON.parse(v) : fb;
+    } catch {
+      return fb;
+    }
+  },
+  set(k, v) {
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+const callAI = async (messages, system, apiKey) => {
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-allow-browser": "true"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      system,
+      messages
+    })
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message);
+  return d.content.find(b => b.type === "text")?.text ?? "";
+};
+const readPDF = async file => {
+  if (!window.pdfjsLib) throw new Error("PDF reader not ready yet.");
+  const buf = await file.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({
+    data: buf
+  }).promise;
+  let out = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const pg = await pdf.getPage(i);
+    const ct = await pg.getTextContent();
+    out += ct.items.map(x => x.str).join(" ").trim() + "\n\n";
+  }
+  return out.trim();
+};
+
+// ── Split text into TTS-safe chunks at sentence boundaries ────────────────────
+const splitChunks = (text, max = 3800) => {
+  const chunks = [];
+  let cur = "";
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  for (const s of sentences) {
+    if ((cur + s).length > max && cur) {
+      chunks.push(cur.trim());
+      cur = s;
+    } else cur += (cur ? " " : "") + s;
+  }
+  if (cur.trim()) chunks.push(cur.trim());
+  return chunks.length ? chunks : [text];
+};
+
+// ── API Key modal ─────────────────────────────────────────────────────────────
+function APIKeyModal({
+  onSave,
+  label = "ANTHROPIC API KEY",
+  placeholder = "sk-ant-api03-…",
+  note,
+  canSkip = true
+}) {
+  const [k, sK] = useState("");
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.88)",
+      backdropFilter: "blur(8px)",
+      zIndex: 100,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 460,
+      width: "100%",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 16,
+      padding: 32
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 32,
+      textAlign: "center",
+      marginBottom: 14
+    }
+  }, "🔑"), /*#__PURE__*/React.createElement("h2", {
+    style: {
+      fontFamily: "sans-serif",
+      fontWeight: 900,
+      fontSize: 18,
+      color: C.acc,
+      letterSpacing: 2,
+      textAlign: "center",
+      marginBottom: 8
+    }
+  }, label), note && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 13,
+      color: C.muted,
+      lineHeight: 1.7,
+      textAlign: "center",
+      marginBottom: 18
+    }
+  }, note), /*#__PURE__*/React.createElement("input", {
+    value: k,
+    onChange: e => sK(e.target.value),
+    placeholder: placeholder,
+    type: "password",
+    style: {
+      width: "100%",
+      background: C.surfB,
+      color: C.txt,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "11px 14px",
+      fontSize: 14,
+      fontFamily: "monospace",
+      outline: "none",
+      marginBottom: 16,
+      boxSizing: "border-box"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10
+    }
+  }, canSkip && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onSave(""),
+    style: {
+      flex: 1,
+      padding: 11,
+      background: C.surfB,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      color: C.muted,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13
+    }
+  }, "Skip"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => k.trim() && onSave(k.trim()),
+    disabled: !k.trim(),
+    style: {
+      flex: 2,
+      padding: 11,
+      background: k.trim() ? C.acc : C.bdr,
+      color: k.trim() ? C.bg : C.muted,
+      border: "none",
+      borderRadius: 8,
+      fontWeight: 800,
+      cursor: k.trim() ? "pointer" : "not-allowed",
+      fontFamily: "sans-serif",
+      fontSize: 14,
+      letterSpacing: 1
+    }
+  }, "SAVE & CONTINUE"))));
+}
+
+// ── UI atoms ──────────────────────────────────────────────────────────────────
+function Btn({
+  onClick,
+  children,
+  title,
+  w = 42,
+  h = 42,
+  accent,
+  muted,
+  active,
+  style = {}
+}) {
+  const [hov, sH] = useState(false);
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    title: title,
+    onMouseEnter: () => sH(true),
+    onMouseLeave: () => sH(false),
+    style: {
+      width: w,
+      height: h,
+      borderRadius: Math.min(w, h) / 2,
+      background: accent ? C.acc : active ? C.surfB : hov ? C.surfB : C.surf,
+      color: accent ? C.bg : muted ? C.muted : C.txt,
+      border: `1px solid ${accent ? C.acc : active ? C.acc : C.bdr}`,
+      cursor: "pointer",
+      fontSize: h > 50 ? 22 : h > 42 ? 16 : 13,
+      fontFamily: "sans-serif",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      transition: "all 0.15s",
+      flexShrink: 0,
+      boxShadow: accent ? `0 0 18px ${C.accGlow}` : "none",
+      ...style
+    }
+  }, children);
+}
+function Chip({
+  label,
+  active,
+  onClick
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    style: {
+      padding: "4px 12px",
+      borderRadius: 20,
+      background: active ? C.acc : C.surf,
+      color: active ? C.bg : C.muted,
+      border: `1px solid ${active ? C.acc : C.bdr}`,
+      fontSize: 12,
+      fontFamily: "sans-serif",
+      fontWeight: active ? 700 : 400,
+      cursor: "pointer",
+      transition: "all 0.15s"
+    }
+  }, label);
+}
+function Spin() {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 18,
+      height: 18,
+      border: `2px solid ${C.bdr}`,
+      borderTopColor: C.ai,
+      borderRadius: "50%",
+      animation: "spinFx 0.8s linear infinite"
+    }
+  });
+}
+function Dvdr() {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 1,
+      height: 28,
+      background: C.bdr,
+      flexShrink: 0
+    }
+  });
+}
+
+// ── AI Panel ──────────────────────────────────────────────────────────────────
+function AIPanel({
+  onClose,
+  context,
+  selText,
+  bookTitle,
+  apiKey
+}) {
+  const [msgs, sM] = useState([]);
+  const [inp, sI] = useState(selText ? `Explain: "${selText.slice(0, 100)}${selText.length > 100 ? "..." : ""}"` : "");
+  const [busy, sB] = useState(false);
+  const bot = useRef(null);
+  const sys = `You are a reading companion for BookLens.\nReading: "${bookTitle || "a text"}".\nRecent text:\n"""\n${context}\n"""\nBe concise but insightful. Use **bold** for key terms.`;
+  const send = async txt => {
+    if (!txt.trim() || busy) return;
+    if (!apiKey) {
+      sM(m => [...m, {
+        role: "user",
+        content: txt
+      }, {
+        role: "assistant",
+        content: "⚠️ No Anthropic API key. Tap ⚙ API Key in the library."
+      }]);
+      sI("");
+      return;
+    }
+    const um = {
+      role: "user",
+      content: txt
+    };
+    const nxt = [...msgs, um];
+    sM(nxt);
+    sI("");
+    sB(true);
+    try {
+      const r = await callAI(nxt.map(m => ({
+        role: m.role,
+        content: m.content
+      })), sys, apiKey);
+      sM(m => [...m, {
+        role: "assistant",
+        content: r
+      }]);
+    } catch (e) {
+      sM(m => [...m, {
+        role: "assistant",
+        content: `⚠️ ${e.message}`
+      }]);
+    }
+    sB(false);
+  };
+  useEffect(() => bot.current?.scrollIntoView({
+    behavior: "smooth"
+  }), [msgs, busy]);
+  const QUICK = [{
+    icon: "📖",
+    lbl: "Explain this",
+    q: selText ? `Explain in depth: "${selText}"` : "Explain what was just discussed in depth."
+  }, {
+    icon: "📋",
+    lbl: "Summarize",
+    q: "Give a concise summary of what I've read so far."
+  }, {
+    icon: "🧠",
+    lbl: "Quiz me",
+    q: "Quiz me — one question at a time, wait for my answer."
+  }, {
+    icon: "🌍",
+    lbl: "Background",
+    q: "Give background context and deeper insights on this passage."
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 60,
+      background: "rgba(0,0,0,0.65)",
+      backdropFilter: "blur(4px)",
+      display: "flex",
+      alignItems: "flex-end"
+    },
+    onClick: e => {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%",
+      maxHeight: "82vh",
+      background: C.aiBg,
+      border: `1px solid ${C.aiBdr}`,
+      borderRadius: "18px 18px 0 0",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "14px 18px",
+      borderBottom: `1px solid ${C.aiBdr}`,
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 22
+    }
+  }, "🤖"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontWeight: 800,
+      fontSize: 14,
+      color: C.ai,
+      letterSpacing: 1
+    }
+  }, "AI COMPANION"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted
+    }
+  }, selText ? `"${selText.slice(0, 50)}…"` : "Select text → floating 🤖 to explain"))), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontSize: 22,
+      padding: 0
+    }
+  }, "✕")), msgs.length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "12px 16px",
+      borderBottom: `1px solid ${C.aiBdr}`,
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: 1,
+      marginBottom: 10
+    }
+  }, "Quick Actions"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, QUICK.map(q => /*#__PURE__*/React.createElement("button", {
+    key: q.lbl,
+    onClick: () => send(q.q),
+    style: {
+      padding: "7px 14px",
+      background: C.surf,
+      border: `1px solid ${C.aiBdr}`,
+      borderRadius: 20,
+      color: C.txt,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13,
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", null, q.icon), /*#__PURE__*/React.createElement("span", null, q.lbl))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      overflowY: "auto",
+      padding: "16px 18px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 14
+    }
+  }, msgs.map((m, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      maxWidth: "88%",
+      alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+      background: m.role === "user" ? C.acc : C.surf,
+      color: m.role === "user" ? C.bg : C.txt,
+      borderRadius: m.role === "user" ? "16px 16px 4px 16px" : "4px 16px 16px 16px",
+      padding: "10px 14px",
+      fontFamily: "sans-serif",
+      fontSize: 14,
+      lineHeight: 1.65,
+      whiteSpace: "pre-wrap"
+    }
+  }, m.content)), busy && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      color: C.muted,
+      fontFamily: "sans-serif",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement(Spin, null), /*#__PURE__*/React.createElement("span", null, "Thinking…")), /*#__PURE__*/React.createElement("div", {
+    ref: bot
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "12px 16px",
+      borderTop: `1px solid ${C.aiBdr}`,
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: inp,
+    onChange: e => sI(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send(inp);
+      }
+    },
+    placeholder: "Ask anything about what you're reading…",
+    style: {
+      flex: 1,
+      background: C.surf,
+      color: C.txt,
+      border: `1px solid ${C.aiBdr}`,
+      borderRadius: 10,
+      padding: "9px 14px",
+      fontSize: 14,
+      fontFamily: "sans-serif",
+      outline: "none"
+    }
+  }), /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => send(inp),
+    accent: true,
+    w: 42,
+    h: 42
+  }, "→"))));
+}
+
+// ── Voice Clone Card (record/upload + create) ─────────────────────────────────
+function VoiceCloneCard({
+  elKey,
+  setElKey,
+  elVoiceId,
+  setElVoiceId,
+  elVoiceName,
+  setElVoiceName
+}) {
+  const [keyInp, sKeyInp] = useState("");
+  const [editKey, sEditKey] = useState(false);
+  const [samples, sSamples] = useState([]); // [{id,blob,url,label}]
+  const [recState, sRecState] = useState("idle"); // idle|recording
+  const [recSec, sRecSec] = useState(0);
+  const [cloneName, sCloneName] = useState("My Voice");
+  const [busy, sBusy] = useState(false);
+  const [err, sErr] = useState("");
+  const [testBusy, sTestBusy] = useState(false);
+  const mrRef = useRef(null);
+  const streamRef = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef = useRef(null);
+  const testAudioRef = useRef(null);
+  const totalSec = samples.reduce((a, s) => a + (s.sec || 0), 0);
+  const startRec = async () => {
+    sErr("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true
+      });
+      streamRef.current = stream;
+      const types = ["audio/webm", "audio/mp4", "audio/ogg"];
+      const mime = types.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+      const mr = new MediaRecorder(stream, mime ? {
+        mimeType: mime
+      } : undefined);
+      chunksRef.current = [];
+      mr.ondataavailable = e => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, {
+          type: mr.mimeType || "audio/webm"
+        });
+        const url = URL.createObjectURL(blob);
+        sSamples(s => [...s, {
+          id: uid(),
+          blob,
+          url,
+          sec: recSec,
+          label: `Recording ${s.length + 1}`
+        }]);
+        stream.getTracks().forEach(t => t.stop());
+        sRecState("idle");
+        sRecSec(0);
+      };
+      mrRef.current = mr;
+      mr.start();
+      sRecState("recording");
+      sRecSec(0);
+      timerRef.current = setInterval(() => sRecSec(s => s + 1), 1000);
+    } catch (e) {
+      sErr("Microphone access denied or unavailable. Try uploading a file instead.");
+    }
+  };
+  const stopRec = () => {
+    clearInterval(timerRef.current);
+    mrRef.current?.stop();
+  };
+  const removeSample = id => sSamples(s => s.filter(x => x.id !== id));
+  const handleUpload = e => {
+    const files = Array.from(e.target.files || []);
+    files.forEach(f => {
+      const url = URL.createObjectURL(f);
+      sSamples(s => [...s, {
+        id: uid(),
+        blob: f,
+        url,
+        sec: 0,
+        label: f.name
+      }]);
+    });
+  };
+  const createClone = async () => {
+    if (!elKey || samples.length === 0) return;
+    sBusy(true);
+    sErr("");
+    try {
+      const fd = new FormData();
+      fd.append("name", cloneName.trim() || "My Voice");
+      samples.forEach((s, i) => fd.append("files", s.blob, s.label.replace(/\s+/g, "_") + (s.blob.type?.includes("mp4") ? ".mp4" : s.blob.type?.includes("ogg") ? ".ogg" : s.blob.type?.includes("mpeg") || s.blob.type?.includes("mp3") ? ".mp3" : s.blob.type?.includes("wav") ? ".wav" : ".webm")));
+      const res = await fetch("https://api.elevenlabs.io/v1/voices/add", {
+        method: "POST",
+        headers: {
+          "xi-api-key": elKey
+        },
+        body: fd
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.detail?.message || j.detail || `ElevenLabs error ${res.status}`);
+      }
+      const d = await res.json();
+      setElVoiceId(d.voice_id);
+      setElVoiceName(cloneName.trim() || "My Voice");
+      sSamples([]);
+    } catch (e) {
+      sErr(e.message);
+    }
+    sBusy(false);
+  };
+  const testClone = async () => {
+    if (!elKey || !elVoiceId) return;
+    sTestBusy(true);
+    sErr("");
+    try {
+      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoiceId}`, {
+        method: "POST",
+        headers: {
+          "xi-api-key": elKey,
+          "Content-Type": "application/json",
+          "Accept": "audio/mpeg"
+        },
+        body: JSON.stringify({
+          text: "Hi, this is what your cloned voice sounds like. Pretty close, right?",
+          model_id: "eleven_turbo_v2_5",
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75
+          }
+        })
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.detail?.message || j.detail || `ElevenLabs error ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = new Audio(url);
+      testAudioRef.current = a;
+      a.play();
+    } catch (e) {
+      sErr(e.message);
+    }
+    sTestBusy(false);
+  };
+  const deleteClone = async () => {
+    if (!confirm("Delete this voice clone? You'll need to record again to recreate it.")) return;
+    sBusy(true);
+    try {
+      await fetch(`https://api.elevenlabs.io/v1/voices/${elVoiceId}`, {
+        method: "DELETE",
+        headers: {
+          "xi-api-key": elKey
+        }
+      });
+    } catch (e) {}
+    setElVoiceId("");
+    setElVoiceName("");
+    sBusy(false);
+  };
+  useEffect(() => () => {
+    clearInterval(timerRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+  }, []);
+
+  // ── Key entry ──────────────────────────────────────────────────────────────
+  if (!elKey || editKey) return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "1.2px",
+      marginBottom: 10
+    }
+  }, "ElevenLabs API Key"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: keyInp,
+    onChange: e => sKeyInp(e.target.value),
+    placeholder: "sk_…",
+    type: "password",
+    style: {
+      flex: 1,
+      background: C.surfB,
+      color: C.txt,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "9px 12px",
+      fontSize: 14,
+      fontFamily: "monospace",
+      outline: "none"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (keyInp.trim()) {
+        setElKey(keyInp.trim());
+        sEditKey(false);
+        sKeyInp("");
+      }
+    },
+    style: {
+      padding: "9px 14px",
+      background: C.cln,
+      border: "none",
+      borderRadius: 8,
+      color: "#fff",
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13,
+      fontWeight: 700
+    }
+  }, "Save")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      marginTop: 8,
+      lineHeight: 1.6
+    }
+  }, "Get a free key at ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.cln
+    }
+  }, "elevenlabs.io"), " → Profile → API Keys. Free tier includes voice cloning."));
+
+  // ── Already cloned ────────────────────────────────────────────────────────
+  if (elVoiceId) return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.clnBg,
+      border: `1px solid ${C.clnBdr}`,
+      borderRadius: 12,
+      padding: "16px 18px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      background: C.cln,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: 20,
+      flexShrink: 0
+    }
+  }, "🎤"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontWeight: 800,
+      fontSize: 15,
+      color: "#C9A8E8"
+    }
+  }, elVoiceName || "My Voice"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: C.muted
+    }
+  }, "✓ Voice clone ready"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: testClone,
+    disabled: testBusy,
+    style: {
+      flex: 1,
+      padding: "9px 14px",
+      background: C.surf,
+      border: `1px solid ${C.clnBdr}`,
+      borderRadius: 8,
+      color: C.txt,
+      cursor: testBusy ? "default" : "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6
+    }
+  }, testBusy ? /*#__PURE__*/React.createElement(Spin, null) : "▶ Test"), /*#__PURE__*/React.createElement("button", {
+    onClick: deleteClone,
+    disabled: busy,
+    style: {
+      flex: 1,
+      padding: "9px 14px",
+      background: "none",
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      color: C.muted,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13
+    }
+  }, "🗑 Delete"))), err && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      background: "#180A0A",
+      border: "1px solid #4A1515",
+      borderRadius: 8,
+      padding: "10px 14px",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: "#E07070"
+    }
+  }, "⚠️ ", err), /*#__PURE__*/React.createElement("button", {
+    onClick: () => sEditKey(true),
+    style: {
+      marginTop: 10,
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      padding: 0
+    }
+  }, "Change API key"));
+
+  // ── Recording / upload setup ──────────────────────────────────────────────
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "1.2px",
+      marginBottom: 10
+    }
+  }, "Record Your Voice"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.clnBg,
+      border: `1px solid ${C.clnBdr}`,
+      borderRadius: 12,
+      padding: "16px 18px",
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: "#C9A8E8",
+      lineHeight: 1.7,
+      marginBottom: 14
+    }
+  }, "Read a paragraph aloud, clearly, with minimal background noise. Aim for ", /*#__PURE__*/React.createElement("strong", null, "60+ seconds total"), " — you can record multiple short clips."), recState === "idle" ? /*#__PURE__*/React.createElement("button", {
+    onClick: startRec,
+    style: {
+      width: "100%",
+      padding: 14,
+      background: C.cln,
+      border: "none",
+      borderRadius: 10,
+      color: "#fff",
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontWeight: 700,
+      fontSize: 14,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8
+    }
+  }, "🎙 Start Recording") : /*#__PURE__*/React.createElement("button", {
+    onClick: stopRec,
+    style: {
+      width: "100%",
+      padding: 14,
+      background: C.red,
+      border: "none",
+      borderRadius: 10,
+      color: "#fff",
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontWeight: 700,
+      fontSize: 14,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      animation: "pulseFx 1.2s ease infinite"
+    }
+  }, "⏹ Stop (", pFmt(recSec), ")"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      margin: "10px 0",
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted
+    }
+  }, "— or —"), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      width: "100%",
+      padding: 12,
+      background: C.surf,
+      border: `1px dashed ${C.clnBdr}`,
+      borderRadius: 10,
+      color: C.muted,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13,
+      textAlign: "center"
+    }
+  }, "📁 Upload audio file(s)", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "audio/*",
+    multiple: true,
+    style: {
+      display: "none"
+    },
+    onChange: handleUpload
+  }))), samples.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      marginBottom: 8
+    }
+  }, samples.length, " sample", samples.length > 1 ? "s" : "", " ", totalSec > 0 ? `· ~${pFmt(totalSec)} recorded` : ""), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, samples.map(s => /*#__PURE__*/React.createElement("div", {
+    key: s.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "8px 12px"
+    }
+  }, /*#__PURE__*/React.createElement("audio", {
+    src: s.url,
+    controls: true,
+    style: {
+      flex: 1,
+      height: 32
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => removeSample(s.id),
+    style: {
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontSize: 16,
+      padding: 0,
+      flexShrink: 0
+    }
+  }, "✕"))))), samples.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
+    value: cloneName,
+    onChange: e => sCloneName(e.target.value),
+    placeholder: "Name this voice",
+    style: {
+      width: "100%",
+      background: C.surfB,
+      color: C.txt,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "9px 12px",
+      fontSize: 14,
+      fontFamily: "sans-serif",
+      outline: "none",
+      marginBottom: 10,
+      boxSizing: "border-box"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: createClone,
+    disabled: busy,
+    style: {
+      width: "100%",
+      padding: 14,
+      background: busy ? C.bdr : C.cln,
+      border: "none",
+      borderRadius: 10,
+      color: busy ? C.muted : "#fff",
+      cursor: busy ? "default" : "pointer",
+      fontFamily: "sans-serif",
+      fontWeight: 700,
+      fontSize: 14,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8
+    }
+  }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Spin, null), " Creating clone…") : "✓ Create Voice Clone")), err && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      background: "#180A0A",
+      border: "1px solid #4A1515",
+      borderRadius: 8,
+      padding: "10px 14px",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: "#E07070"
+    }
+  }, "⚠️ ", err), /*#__PURE__*/React.createElement("button", {
+    onClick: () => sEditKey(true),
+    style: {
+      marginTop: 10,
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      padding: 0
+    }
+  }, "Change API key"));
+}
+
+// ── Voice Settings Panel ───────────────────────────────────────────────────────
+function VoicePanel({
+  ttsMode,
+  setTtsMode,
+  oaiKey,
+  setOaiKey,
+  oaiVoice,
+  setOaiVoice,
+  browserVoices,
+  browserVoiceIdx,
+  setBrowserVoiceIdx,
+  elKey,
+  setElKey,
+  elVoiceId,
+  setElVoiceId,
+  elVoiceName,
+  setElVoiceName,
+  onClose
+}) {
+  const [editKey, sEditKey] = useState(false);
+  const [keyInp, sKeyInp] = useState("");
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 60,
+      background: "rgba(0,0,0,0.65)",
+      backdropFilter: "blur(4px)",
+      display: "flex",
+      alignItems: "flex-end"
+    },
+    onClick: e => {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: "100%",
+      maxHeight: "88vh",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: "18px 18px 0 0",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "14px 18px",
+      borderBottom: `1px solid ${C.bdr}`,
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontWeight: 800,
+      fontSize: 14,
+      color: C.acc,
+      letterSpacing: 1
+    }
+  }, "🎙 VOICE SETTINGS"), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontSize: 22,
+      padding: 0
+    }
+  }, "✕")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowY: "auto",
+      padding: "20px 18px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 22
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "1.2px",
+      marginBottom: 12
+    }
+  }, "Voice Engine"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr 1fr",
+      gap: 8
+    }
+  }, [{
+    id: "browser",
+    icon: "🔊",
+    name: "Browser",
+    desc: "Free"
+  }, {
+    id: "openai",
+    icon: "✨",
+    name: "OpenAI",
+    desc: "Natural HD"
+  }, {
+    id: "clone",
+    icon: "🎤",
+    name: "My Voice",
+    desc: "Cloned"
+  }].map(e => /*#__PURE__*/React.createElement("button", {
+    key: e.id,
+    onClick: () => setTtsMode(e.id),
+    style: {
+      padding: "12px 8px",
+      background: ttsMode === e.id ? C.surfB : C.surf,
+      border: `2px solid ${ttsMode === e.id ? e.id === "clone" ? C.cln : C.acc : C.bdr}`,
+      borderRadius: 12,
+      cursor: "pointer",
+      textAlign: "left",
+      transition: "all 0.15s"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 19,
+      marginBottom: 5
+    }
+  }, e.icon), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontWeight: 700,
+      fontSize: 13,
+      color: ttsMode === e.id ? e.id === "clone" ? C.cln : C.acc : C.txt,
+      marginBottom: 2
+    }
+  }, e.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted
+    }
+  }, e.desc))))), ttsMode === "openai" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "1.2px",
+      marginBottom: 10
+    }
+  }, "OpenAI API Key"), oaiKey && !editKey ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      background: C.surfB,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "9px 14px",
+      fontFamily: "monospace",
+      fontSize: 13,
+      color: C.grn
+    }
+  }, "✓ Key saved (sk-…", oaiKey.slice(-4), ")"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      sEditKey(true);
+      sKeyInp("");
+    },
+    style: {
+      padding: "9px 14px",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      color: C.muted,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13
+    }
+  }, "Change")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: keyInp,
+    onChange: e => sKeyInp(e.target.value),
+    placeholder: "sk-proj-…",
+    type: "password",
+    style: {
+      flex: 1,
+      background: C.surfB,
+      color: C.txt,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "9px 12px",
+      fontSize: 14,
+      fontFamily: "monospace",
+      outline: "none"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (keyInp.trim()) {
+        setOaiKey(keyInp.trim());
+        sEditKey(false);
+      }
+    },
+    style: {
+      padding: "9px 14px",
+      background: C.acc,
+      border: "none",
+      borderRadius: 8,
+      color: C.bg,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13,
+      fontWeight: 700
+    }
+  }, "Save")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      marginTop: 8,
+      lineHeight: 1.6
+    }
+  }, "Get key at ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.ai
+    }
+  }, "platform.openai.com/api-keys"), " · ~$0.015 per chapter")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "1.2px",
+      marginBottom: 10
+    }
+  }, "Voice"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, OAI_VOICES.map(v => /*#__PURE__*/React.createElement("button", {
+    key: v.id,
+    onClick: () => setOaiVoice(v.id),
+    style: {
+      padding: "12px 14px",
+      background: oaiVoice === v.id ? C.surfB : C.surf,
+      border: `2px solid ${oaiVoice === v.id ? C.acc : C.bdr}`,
+      borderRadius: 10,
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      transition: "all 0.15s"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      background: oaiVoice === v.id ? C.acc : C.bdr,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontFamily: "sans-serif",
+      fontWeight: 700,
+      fontSize: 13,
+      color: oaiVoice === v.id ? C.bg : C.muted,
+      flexShrink: 0
+    }
+  }, v.label[0]), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontWeight: 700,
+      fontSize: 14,
+      color: oaiVoice === v.id ? C.acc : C.txt
+    }
+  }, v.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: C.muted
+    }
+  }, v.desc)), oaiVoice === v.id && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginLeft: "auto",
+      color: C.acc,
+      fontSize: 18
+    }
+  }, "✓")))))), ttsMode === "browser" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "1.2px",
+      marginBottom: 10
+    }
+  }, "System Voice"), /*#__PURE__*/React.createElement("select", {
+    value: browserVoiceIdx,
+    onChange: e => setBrowserVoiceIdx(+e.target.value),
+    style: {
+      width: "100%",
+      background: C.surfB,
+      color: C.txt,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "9px 12px",
+      fontSize: 13,
+      fontFamily: "sans-serif",
+      outline: "none",
+      marginBottom: 12
+    }
+  }, browserVoices.map((v, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, v.name, " — ", v.lang, v.localService ? "" : " (online)"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.grnBg,
+      border: `1px solid ${C.grnBdr}`,
+      borderRadius: 10,
+      padding: "12px 14px",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: C.grn,
+      lineHeight: 1.7
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "💡 Tip: Better free voices"), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: "#9ED4AC"
+    }
+  }, "iPhone:"), " Settings → Accessibility → Spoken Content → Voices → English → download any \"Enhanced\" or \"Premium\" voice", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: "#9ED4AC"
+    }
+  }, "Android:"), " Settings → Text-to-speech → Google TTS → Install HD voice data")), ttsMode === "clone" && /*#__PURE__*/React.createElement(VoiceCloneCard, {
+    elKey: elKey,
+    setElKey: setElKey,
+    elVoiceId: elVoiceId,
+    setElVoiceId: setElVoiceId,
+    elVoiceName: elVoiceName,
+    setElVoiceName: setElVoiceName
+  }))));
+}
+
+// ── Library ────────────────────────────────────────────────────────────────────
+function Library({
+  books,
+  progMap,
+  onOpen,
+  onDelete,
+  onSave,
+  onSetKey
+}) {
+  const [mode, sMode] = useState("home");
+  const [title, sTitle] = useState("");
+  const [body, sBody] = useState("");
+  const [pdfErr, sPdfErr] = useState("");
+  const [pdfBusy, sPdfBusy] = useState(false);
+  const doPDF = async file => {
+    if (!file) return;
+    sPdfErr("");
+    sPdfBusy(true);
+    try {
+      const t = await readPDF(file);
+      const nm = file.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ");
+      onSave(nm || "Untitled", t);
+    } catch (e) {
+      sPdfErr(e.message);
+    }
+    sPdfBusy(false);
+  };
+  if (mode === "add") return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: "100vh",
+      background: C.bg,
+      color: C.txt,
+      padding: "32px 16px",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 640,
+      width: "100%"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      marginBottom: 28
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => sMode("home"),
+    style: {
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontSize: 22,
+      padding: 0
+    }
+  }, "←"), /*#__PURE__*/React.createElement("h2", {
+    style: {
+      margin: 0,
+      fontFamily: "sans-serif",
+      fontSize: 18,
+      fontWeight: 800,
+      color: C.acc
+    }
+  }, "ADD TEXT")), /*#__PURE__*/React.createElement("input", {
+    value: title,
+    onChange: e => sTitle(e.target.value),
+    placeholder: "Title (e.g. Chapter 3)",
+    style: {
+      width: "100%",
+      background: C.surf,
+      color: C.txt,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "10px 14px",
+      fontSize: 14,
+      fontFamily: "sans-serif",
+      outline: "none",
+      marginBottom: 12,
+      boxSizing: "border-box"
+    }
+  }), /*#__PURE__*/React.createElement("textarea", {
+    value: body,
+    onChange: e => sBody(e.target.value),
+    placeholder: "Paste your book chapter, article, or any text here…",
+    style: {
+      width: "100%",
+      height: 300,
+      background: C.surf,
+      color: C.txt,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      padding: "12px 14px",
+      fontSize: 16,
+      lineHeight: 1.8,
+      fontFamily: "'Georgia',serif",
+      resize: "vertical",
+      outline: "none",
+      boxSizing: "border-box"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: C.muted,
+      marginTop: 6,
+      marginBottom: 16
+    }
+  }, pWords(body).length.toLocaleString(), " words"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      if (title.trim() && body.trim()) {
+        onSave(title.trim(), body.trim());
+        sMode("home");
+        sTitle("");
+        sBody("");
+      }
+    },
+    disabled: !title.trim() || !body.trim(),
+    style: {
+      width: "100%",
+      padding: 15,
+      background: title && body ? C.acc : C.bdr,
+      color: title && body ? C.bg : C.muted,
+      border: "none",
+      borderRadius: 8,
+      fontSize: 16,
+      fontWeight: 800,
+      letterSpacing: 2,
+      fontFamily: "sans-serif",
+      cursor: title && body ? "pointer" : "not-allowed"
+    }
+  }, "SAVE & READ")));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: "100vh",
+      background: C.bg,
+      color: C.txt,
+      padding: "36px 16px",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 640,
+      width: "100%"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      marginBottom: 32
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 38,
+      marginBottom: 8
+    }
+  }, "📚"), /*#__PURE__*/React.createElement("h1", {
+    style: {
+      margin: 0,
+      fontFamily: "sans-serif",
+      fontSize: 24,
+      fontWeight: 900,
+      color: C.acc,
+      letterSpacing: 4
+    }
+  }, "BOOKLENS PRO"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "6px 0 0",
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      letterSpacing: 2
+    }
+  }, "YOUR AI-POWERED AUDIO LIBRARY")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr 1fr",
+      gap: 10,
+      marginBottom: 24
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => sMode("add"),
+    style: {
+      padding: "16px 10px",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 12,
+      color: C.txt,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      fontWeight: 600,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 7,
+      transition: "border-color 0.2s"
+    },
+    onMouseEnter: e => e.currentTarget.style.borderColor = C.accDim,
+    onMouseLeave: e => e.currentTarget.style.borderColor = C.bdr
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 24
+    }
+  }, "✍️"), /*#__PURE__*/React.createElement("span", null, "Paste Text")), /*#__PURE__*/React.createElement("label", {
+    style: {
+      padding: "16px 10px",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 12,
+      color: C.txt,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      fontWeight: 600,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 7,
+      transition: "border-color 0.2s"
+    },
+    onMouseEnter: e => e.currentTarget.style.borderColor = C.accDim,
+    onMouseLeave: e => e.currentTarget.style.borderColor = C.bdr
+  }, pdfBusy ? /*#__PURE__*/React.createElement(Spin, null) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 24
+    }
+  }, "📄"), /*#__PURE__*/React.createElement("span", null, pdfBusy ? "Reading…" : "Upload PDF"), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".pdf",
+    style: {
+      display: "none"
+    },
+    onChange: e => doPDF(e.target.files?.[0])
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: onSetKey,
+    style: {
+      padding: "16px 10px",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 12,
+      color: C.txt,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      fontWeight: 600,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 7,
+      transition: "border-color 0.2s"
+    },
+    onMouseEnter: e => e.currentTarget.style.borderColor = C.accDim,
+    onMouseLeave: e => e.currentTarget.style.borderColor = C.bdr
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 24
+    }
+  }, "⚙️"), /*#__PURE__*/React.createElement("span", null, "API Key"))), pdfErr && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#180A0A",
+      border: "1px solid #4A1515",
+      borderRadius: 8,
+      padding: "10px 14px",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: "#E07070",
+      marginBottom: 14
+    }
+  }, "⚠️ ", pdfErr), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      textTransform: "uppercase",
+      letterSpacing: "1.2px",
+      marginBottom: 12
+    }
+  }, "Library (", books.length, ")"), books.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      padding: "40px 24px",
+      color: C.muted,
+      fontFamily: "sans-serif",
+      fontSize: 14,
+      background: C.surf,
+      borderRadius: 12,
+      border: `1px dashed ${C.bdr}`
+    }
+  }, "No books yet.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      opacity: 0.6
+    }
+  }, "Add text or upload a PDF to get started.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onSave(SAMPLE_TITLE, SAMPLE_TEXT),
+    style: {
+      padding: 12,
+      background: C.grnBg,
+      border: `1px solid ${C.grnBdr}`,
+      borderRadius: 8,
+      color: C.grn,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 13
+    }
+  }, "✨ Load sample text to try it out")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 10
+    }
+  }, books.map(b => {
+    const prog = progMap[b.id] ?? 0;
+    const pct = b.wordCount > 0 ? Math.round(prog / b.wordCount * 100) : 0;
+    const eta = Math.max(0, (b.wordCount - prog) / (WPS * 1));
+    return /*#__PURE__*/React.createElement("div", {
+      key: b.id,
+      style: {
+        background: C.surf,
+        border: `1px solid ${C.bdr}`,
+        borderRadius: 12,
+        padding: "16px 18px",
+        cursor: "pointer",
+        transition: "border-color 0.2s"
+      },
+      onClick: () => onOpen(b.id),
+      onMouseEnter: e => e.currentTarget.style.borderColor = C.accDim,
+      onMouseLeave: e => e.currentTarget.style.borderColor = C.bdr
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "flex-start",
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontFamily: "sans-serif",
+        fontWeight: 700,
+        fontSize: 15,
+        color: C.txt,
+        marginBottom: 3,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      }
+    }, b.title), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontFamily: "sans-serif",
+        fontSize: 12,
+        color: C.muted
+      }
+    }, b.wordCount.toLocaleString(), " words · ", tAgo(b.lastOpenedAt || b.createdAt), eta > 60 ? ` · ${pFmt(eta)} left` : "")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontFamily: "sans-serif",
+        fontSize: 14,
+        color: pct === 100 ? C.grn : C.acc,
+        fontWeight: 800,
+        marginLeft: 14,
+        flexShrink: 0
+      }
+    }, pct, "%")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 4,
+        background: C.bdr,
+        borderRadius: 3,
+        overflow: "hidden",
+        marginBottom: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: "100%",
+        width: `${pct}%`,
+        background: pct === 100 ? C.grn : C.acc,
+        borderRadius: 3
+      }
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontFamily: "sans-serif",
+        fontSize: 12,
+        color: pct === 100 ? C.grn : C.muted
+      }
+    }, pct === 100 ? "✓ Complete" : `${prog.toLocaleString()} / ${b.wordCount.toLocaleString()} words`), /*#__PURE__*/React.createElement("button", {
+      onClick: e => {
+        e.stopPropagation();
+        onDelete(b.id);
+      },
+      style: {
+        background: "none",
+        border: "none",
+        color: C.muted,
+        cursor: "pointer",
+        fontFamily: "sans-serif",
+        fontSize: 11,
+        padding: 0
+      }
+    }, "🗑 Delete")));
+  }))));
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function App() {
+  const [view, sView] = useState("library");
+  const [books, sBooks] = useState([]);
+  const [progMap, sProg] = useState({});
+  const [active, sActive] = useState(null);
+  const [apiKey, sApiKey] = useState("");
+  const [showKeyModal, sKeyModal] = useState(false);
+  // TTS mode
+  const [ttsMode, sTtsMode] = useState(() => ST.get(K.ttsmode, "browser"));
+  const [oaiKey, sOaiKey] = useState(() => ST.get(K.oaikey, ""));
+  const [oaiVoice, sOaiVoice] = useState(() => ST.get(K.oaivoice, "nova"));
+  const [elKey, sElKey] = useState(() => ST.get(K.elkey, ""));
+  const [elVoiceId, sElVoiceId] = useState(() => ST.get(K.elvid, ""));
+  const [elVoiceName, sElVoiceName] = useState(() => ST.get(K.elname, ""));
+  const [showVoice, sShowVoice] = useState(false);
+  const [genBusy, sGenBusy] = useState(false);
+  // Reader
+  const [playing, sPlay] = useState(false);
+  const [paused, sPause] = useState(false);
+  const [wIdx, sWIdx] = useState(-1);
+  const [rate, sRate] = useState(1.0);
+  const [pitch, sPitch] = useState(1.0);
+  const [vol, sVol] = useState(1.0);
+  const [voices, sVoices] = useState([]);
+  const [vIdx, sVIdx] = useState(-1);
+  const [bOk, sBOk] = useState(true);
+  const [bmarks, sBmarks] = useState([]);
+  const [showBM, sShowBM] = useState(false);
+  const [aiOpen, sAI] = useState(false);
+  const [selTxt, sSelTxt] = useState("");
+  const [cmdFb, sCmdFb] = useState("");
+  const [micOn, sMic] = useState(false);
+  const [showHelp, sHelp] = useState(false);
+
+  // Refs
+  const rR = useRef(1);
+  const pR = useRef(1);
+  const vR = useRef(1);
+  const wR = useRef(-1);
+  const plR = useRef(false);
+  const paR = useRef(false);
+  const vsR = useRef([]);
+  const viR = useRef(-1);
+  const wpR = useRef([]);
+  const offR = useRef(0);
+  const micR = useRef(false);
+  const recR = useRef(null);
+  const acR = useRef(null);
+  const elR = useRef({});
+  const saveT = useRef(null);
+  const ttsModeR = useRef("browser");
+  const oaiKeyR = useRef("");
+  const oaiVoiceR = useRef("nova");
+  const elKeyR = useRef("");
+  const elVoiceIdR = useRef("");
+  const audioElR = useRef(null);
+  const wordTimerR = useRef(null);
+  const stopFlagR = useRef(false);
+  useEffect(() => {
+    rR.current = rate;
+  }, [rate]);
+  useEffect(() => {
+    pR.current = pitch;
+  }, [pitch]);
+  useEffect(() => {
+    vR.current = vol;
+  }, [vol]);
+  useEffect(() => {
+    wR.current = wIdx;
+  }, [wIdx]);
+  useEffect(() => {
+    plR.current = playing;
+  }, [playing]);
+  useEffect(() => {
+    paR.current = paused;
+  }, [paused]);
+  useEffect(() => {
+    vsR.current = voices;
+  }, [voices]);
+  useEffect(() => {
+    viR.current = vIdx;
+  }, [vIdx]);
+  useEffect(() => {
+    micR.current = micOn;
+  }, [micOn]);
+  useEffect(() => {
+    acR.current = active;
+  }, [active]);
+  useEffect(() => {
+    ttsModeR.current = ttsMode;
+    ST.set(K.ttsmode, ttsMode);
+  }, [ttsMode]);
+  useEffect(() => {
+    oaiKeyR.current = oaiKey;
+    ST.set(K.oaikey, oaiKey);
+  }, [oaiKey]);
+  useEffect(() => {
+    oaiVoiceR.current = oaiVoice;
+    ST.set(K.oaivoice, oaiVoice);
+  }, [oaiVoice]);
+  useEffect(() => {
+    elKeyR.current = elKey;
+    ST.set(K.elkey, elKey);
+  }, [elKey]);
+  useEffect(() => {
+    elVoiceIdR.current = elVoiceId;
+    ST.set(K.elvid, elVoiceId);
+  }, [elVoiceId]);
+  useEffect(() => {
+    ST.set(K.elname, elVoiceName);
+  }, [elVoiceName]);
+  useEffect(() => {
+    if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const lib = ST.get(K.lib, []);
+    const pm = {};
+    for (const b of lib) pm[b.id] = ST.get(K.prog(b.id), 0);
+    sBooks(lib);
+    sProg(pm);
+    const k = ST.get(K.key, "");
+    if (k) {
+      sApiKey(k);
+    }
+    return () => {
+      window.speechSynthesis.cancel();
+      recR.current?.stop();
+      clearInterval(wordTimerR.current);
+      if (audioElR.current) audioElR.current.pause();
+    };
+  }, []);
+  useEffect(() => {
+    const load = () => {
+      const v = window.speechSynthesis.getVoices();
+      sVoices(v);
+      vsR.current = v;
+      if (v.length && viR.current < 0) {
+        const en = v.findIndex(x => x.lang.startsWith("en") && x.localService);
+        const i = en >= 0 ? en : 0;
+        sVIdx(i);
+        viR.current = i;
+      }
+    };
+    load();
+    window.speechSynthesis.onvoiceschanged = load;
+  }, []);
+  const saveProg = useCallback((id, idx) => {
+    clearTimeout(saveT.current);
+    saveT.current = setTimeout(() => {
+      ST.set(K.prog(id), idx);
+      sProg(p => ({
+        ...p,
+        [id]: idx
+      }));
+    }, 2000);
+  }, []);
+  const openBook = useCallback(id => {
+    const text = ST.get(K.text(id), "");
+    if (!text) return;
+    const lib = ST.get(K.lib, []);
+    const meta = lib.find(b => b.id === id);
+    if (!meta) return;
+    const updLib = lib.map(b => b.id === id ? {
+      ...b,
+      lastOpenedAt: new Date().toISOString()
+    } : b);
+    ST.set(K.lib, updLib);
+    sBooks(updLib);
+    const wpos = pWords(text);
+    wpR.current = wpos;
+    const pg = ST.get(K.prog(id), 0);
+    const bm = ST.get(K.bm(id), []);
+    sActive({
+      id,
+      title: meta.title,
+      text,
+      wpos
+    });
+    sBmarks(bm);
+    sWIdx(pg);
+    wR.current = pg;
+    sView("reader");
+  }, []);
+  const saveBook = useCallback((title, text) => {
+    const id = uid();
+    const wpos = pWords(text);
+    const meta = {
+      id,
+      title,
+      wordCount: wpos.length,
+      createdAt: new Date().toISOString(),
+      lastOpenedAt: new Date().toISOString()
+    };
+    const lib = ST.get(K.lib, []);
+    const nl = [meta, ...lib];
+    ST.set(K.lib, nl);
+    ST.set(K.text(id), text);
+    sBooks(nl);
+    sProg(p => ({
+      ...p,
+      [id]: 0
+    }));
+    wpR.current = wpos;
+    sActive({
+      id,
+      title,
+      text,
+      wpos
+    });
+    sBmarks([]);
+    sWIdx(0);
+    wR.current = 0;
+    sView("reader");
+  }, []);
+  const deleteBook = useCallback(id => {
+    const lib = ST.get(K.lib, []);
+    ST.set(K.lib, lib.filter(b => b.id !== id));
+    sBooks(b => b.filter(x => x.id !== id));
+    sProg(p => {
+      const n = {
+        ...p
+      };
+      delete n[id];
+      return n;
+    });
+  }, []);
+
+  // ── Stop everything ───────────────────────────────────────────────────────
+  const stopAll = useCallback(() => {
+    stopFlagR.current = true;
+    window.speechSynthesis.cancel();
+    clearInterval(wordTimerR.current);
+    if (audioElR.current) {
+      audioElR.current.pause();
+      audioElR.current = null;
+    }
+    sPlay(false);
+    sPause(false);
+    sWIdx(-1);
+    wR.current = -1;
+    plR.current = false;
+    paR.current = false;
+    sGenBusy(false);
+    setTimeout(() => {
+      stopFlagR.current = false;
+    }, 100);
+  }, []);
+
+  // ── Browser TTS playback ──────────────────────────────────────────────────
+  const playFromBrowser = useCallback(idx => {
+    const wp = wpR.current;
+    const t = acR.current?.text ?? "";
+    if (!t) return;
+    const ci = Math.max(0, Math.min(idx, wp.length - 1));
+    const off = wp[ci]?.s ?? 0;
+    offR.current = off;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(t.slice(off));
+    const vs = vsR.current;
+    const vi = viR.current;
+    if (vs[vi]) utt.voice = vs[vi];
+    utt.rate = rR.current;
+    utt.pitch = pR.current;
+    utt.volume = vR.current;
+    let fired = false;
+    utt.onboundary = e => {
+      if (e.name !== "word") return;
+      fired = true;
+      sBOk(true);
+      const abs = offR.current + e.charIndex;
+      const wi = wpR.current.findIndex(w => abs >= w.s && abs < w.e);
+      if (wi >= 0) {
+        sWIdx(wi);
+        wR.current = wi;
+        if (acR.current?.id && wi % 8 === 0) saveProg(acR.current.id, wi);
+      }
+    };
+    setTimeout(() => {
+      if (!fired) sBOk(false);
+    }, 2500);
+    utt.onend = () => {
+      sPlay(false);
+      sPause(false);
+      sWIdx(-1);
+      wR.current = -1;
+      plR.current = false;
+      paR.current = false;
+      if (acR.current?.id) saveProg(acR.current.id, 0);
+    };
+    utt.onerror = () => {
+      sPlay(false);
+      plR.current = false;
+    };
+    window.speechSynthesis.speak(utt);
+    sWIdx(ci);
+    wR.current = ci;
+    sPlay(true);
+    sPause(false);
+    plR.current = true;
+    paR.current = false;
+  }, [saveProg]);
+
+  // ── OpenAI TTS playback ───────────────────────────────────────────────────
+  const playFromOpenAI = useCallback(async idx => {
+    const wp = wpR.current;
+    const t = acR.current?.text ?? "";
+    if (!t || !oaiKeyR.current) return;
+    stopFlagR.current = false;
+    const startChar = wp[Math.max(0, Math.min(idx, wp.length - 1))]?.s ?? 0;
+    const textToRead = t.slice(startChar);
+    const chunks = splitChunks(textToRead);
+
+    // Map chunks back to absolute word indices
+    let wordOffset = idx;
+    const chunkMeta = chunks.map(ch => {
+      const wc = ch.trim().split(/\s+/).filter(Boolean).length;
+      const meta = {
+        text: ch,
+        wordStart: wordOffset,
+        wordCount: wc
+      };
+      wordOffset += wc;
+      return meta;
+    });
+    sPlay(true);
+    sPause(false);
+    plR.current = true;
+    paR.current = false;
+    sWIdx(idx);
+    wR.current = idx;
+    for (const chunk of chunkMeta) {
+      if (stopFlagR.current || !plR.current) break;
+      sGenBusy(true);
+      try {
+        const res = await fetch("https://api.openai.com/v1/audio/speech", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${oaiKeyR.current}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "tts-1-hd",
+            input: chunk.text,
+            voice: oaiVoiceR.current
+          })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error?.message || `OpenAI error ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.playbackRate = rR.current;
+        audioElR.current = audio;
+        sGenBusy(false);
+        if (stopFlagR.current) {
+          URL.revokeObjectURL(url);
+          break;
+        }
+        await new Promise((resolve, reject) => {
+          audio.addEventListener("loadedmetadata", () => {
+            const wps = chunk.wordCount / audio.duration;
+            clearInterval(wordTimerR.current);
+            wordTimerR.current = setInterval(() => {
+              if (!plR.current) return;
+              const wi = Math.min(chunk.wordStart + Math.floor(audio.currentTime * audio.playbackRate * wps), chunk.wordStart + chunk.wordCount - 1);
+              sWIdx(wi);
+              wR.current = wi;
+              if (acR.current?.id && wi % 8 === 0) saveProg(acR.current.id, wi);
+            }, 120);
+            audio.play().catch(reject);
+          });
+          audio.addEventListener("ended", () => {
+            clearInterval(wordTimerR.current);
+            URL.revokeObjectURL(url);
+            resolve();
+          });
+          audio.addEventListener("error", e => {
+            URL.revokeObjectURL(url);
+            reject(new Error("Audio playback error"));
+          });
+        });
+      } catch (e) {
+        sGenBusy(false);
+        sCmdFb("⚠️ " + e.message);
+        setTimeout(() => sCmdFb(""), 4000);
+        break;
+      }
+    }
+    if (!stopFlagR.current) {
+      sPlay(false);
+      sPause(false);
+      sWIdx(-1);
+      wR.current = -1;
+      plR.current = false;
+      paR.current = false;
+      if (acR.current?.id) saveProg(acR.current.id, 0);
+    }
+  }, [saveProg]);
+
+  // ── ElevenLabs (cloned voice) playback ───────────────────────────────────
+  const playFromElevenLabs = useCallback(async idx => {
+    const wp = wpR.current;
+    const t = acR.current?.text ?? "";
+    if (!t || !elKeyR.current || !elVoiceIdR.current) return;
+    stopFlagR.current = false;
+    const startChar = wp[Math.max(0, Math.min(idx, wp.length - 1))]?.s ?? 0;
+    const textToRead = t.slice(startChar);
+    const chunks = splitChunks(textToRead, 1800);
+    let wordOffset = idx;
+    const chunkMeta = chunks.map(ch => {
+      const wc = ch.trim().split(/\s+/).filter(Boolean).length;
+      const meta = {
+        text: ch,
+        wordStart: wordOffset,
+        wordCount: wc
+      };
+      wordOffset += wc;
+      return meta;
+    });
+    sPlay(true);
+    sPause(false);
+    plR.current = true;
+    paR.current = false;
+    sWIdx(idx);
+    wR.current = idx;
+    for (const chunk of chunkMeta) {
+      if (stopFlagR.current || !plR.current) break;
+      sGenBusy(true);
+      try {
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoiceIdR.current}`, {
+          method: "POST",
+          headers: {
+            "xi-api-key": elKeyR.current,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg"
+          },
+          body: JSON.stringify({
+            text: chunk.text,
+            model_id: "eleven_turbo_v2_5",
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75
+            }
+          })
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.detail?.message || j.detail || `ElevenLabs error ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.playbackRate = rR.current;
+        audioElR.current = audio;
+        sGenBusy(false);
+        if (stopFlagR.current) {
+          URL.revokeObjectURL(url);
+          break;
+        }
+        await new Promise((resolve, reject) => {
+          audio.addEventListener("loadedmetadata", () => {
+            const wps = chunk.wordCount / audio.duration;
+            clearInterval(wordTimerR.current);
+            wordTimerR.current = setInterval(() => {
+              if (!plR.current) return;
+              const wi = Math.min(chunk.wordStart + Math.floor(audio.currentTime * audio.playbackRate * wps), chunk.wordStart + chunk.wordCount - 1);
+              sWIdx(wi);
+              wR.current = wi;
+              if (acR.current?.id && wi % 8 === 0) saveProg(acR.current.id, wi);
+            }, 120);
+            audio.play().catch(reject);
+          });
+          audio.addEventListener("ended", () => {
+            clearInterval(wordTimerR.current);
+            URL.revokeObjectURL(url);
+            resolve();
+          });
+          audio.addEventListener("error", () => {
+            URL.revokeObjectURL(url);
+            reject(new Error("Audio playback error"));
+          });
+        });
+      } catch (e) {
+        sGenBusy(false);
+        sCmdFb("⚠️ " + e.message);
+        setTimeout(() => sCmdFb(""), 4000);
+        break;
+      }
+    }
+    if (!stopFlagR.current) {
+      sPlay(false);
+      sPause(false);
+      sWIdx(-1);
+      wR.current = -1;
+      plR.current = false;
+      paR.current = false;
+      if (acR.current?.id) saveProg(acR.current.id, 0);
+    }
+  }, [saveProg]);
+  const playFrom = useCallback(idx => {
+    stopAll();
+    setTimeout(() => {
+      if (ttsModeR.current === "openai" && oaiKeyR.current) {
+        playFromOpenAI(idx);
+      } else if (ttsModeR.current === "clone" && elKeyR.current && elVoiceIdR.current) {
+        playFromElevenLabs(idx);
+      } else {
+        playFromBrowser(idx);
+      }
+    }, 80);
+  }, [stopAll, playFromOpenAI, playFromElevenLabs, playFromBrowser]);
+  const seek = useCallback(secs => {
+    if (audioElR.current) {
+      const a = audioElR.current;
+      a.currentTime = Math.max(0, Math.min(a.duration || 9999, a.currentTime + secs));
+      return;
+    }
+    const skip = Math.round(Math.abs(secs) * WPS * rR.current);
+    const cur = wR.current >= 0 ? wR.current : 0;
+    playFrom(secs < 0 ? Math.max(0, cur - skip) : Math.min(wpR.current.length - 1, cur + skip));
+  }, [playFrom]);
+  const toggle = useCallback(() => {
+    if (audioElR.current) {
+      if (paR.current) {
+        audioElR.current.play();
+        sPlay(true);
+        sPause(false);
+        plR.current = true;
+        paR.current = false;
+      } else {
+        audioElR.current.pause();
+        sPlay(false);
+        sPause(true);
+        plR.current = false;
+        paR.current = true;
+      }
+      return;
+    }
+    if (paR.current) {
+      window.speechSynthesis.resume();
+      sPlay(true);
+      sPause(false);
+      plR.current = true;
+      paR.current = false;
+    } else {
+      window.speechSynthesis.pause();
+      sPlay(false);
+      sPause(true);
+      plR.current = false;
+      paR.current = true;
+    }
+  }, []);
+  const changeRate = useCallback(r => {
+    rR.current = r;
+    sRate(r);
+    if (audioElR.current) {
+      audioElR.current.playbackRate = r;
+      return;
+    }
+    if (plR.current || paR.current) playFrom(wR.current >= 0 ? wR.current : 0);
+  }, [playFrom]);
+  const addBM = useCallback(() => {
+    if (!active || wIdx < 0) return;
+    const wp = active.wpos;
+    const ctx = active.text.slice(wp[Math.max(0, wIdx - 3)]?.s ?? 0, wp[Math.min(wp.length - 1, wIdx + 15)]?.e ?? 0);
+    const bm = {
+      id: uid(),
+      wordIdx: wIdx,
+      context: ctx,
+      createdAt: new Date().toISOString()
+    };
+    const nBM = [bm, ...bmarks];
+    sBmarks(nBM);
+    ST.set(K.bm(active.id), nBM);
+    sCmdFb("🔖 Bookmarked!");
+    setTimeout(() => sCmdFb(""), 2000);
+  }, [active, wIdx, bmarks]);
+  const delBM = useCallback(bmId => {
+    if (!active) return;
+    const nBM = bmarks.filter(b => b.id !== bmId);
+    sBmarks(nBM);
+    ST.set(K.bm(active.id), nBM);
+  }, [active, bmarks]);
+  useEffect(() => {
+    if (view !== "reader") return;
+    const h = () => sSelTxt(window.getSelection()?.toString().trim() ?? "");
+    document.addEventListener("selectionchange", h);
+    return () => document.removeEventListener("selectionchange", h);
+  }, [view]);
+  const fb = useCallback(msg => {
+    sCmdFb(msg);
+    setTimeout(() => sCmdFb(""), 2500);
+  }, []);
+  const doCmd = useCallback(raw => {
+    const c = raw.toLowerCase();
+    if (/\bback\b/.test(c) && /30|thirty/.test(c)) {
+      seek(-30);
+      fb("⏪ Back 30s");
+    } else if (/\bback\b/.test(c)) {
+      seek(-10);
+      fb("⏪ Back 10s");
+    } else if (/\b(forward|skip)\b/.test(c) && /30|thirty/.test(c)) {
+      seek(30);
+      fb("⏩ Fwd 30s");
+    } else if (/\b(forward|skip)\b/.test(c)) {
+      seek(10);
+      fb("⏩ Fwd 10s");
+    } else if (/\bpause\b/.test(c) && plR.current) {
+      toggle();
+      fb("⏸ Paused");
+    } else if (/\b(play|resume)\b/.test(c) && paR.current) {
+      toggle();
+      fb("▶ Playing");
+    } else if (/\bstop\b/.test(c)) {
+      stopAll();
+      fb("⏹ Stopped");
+    } else if (/faster|speed up/.test(c)) {
+      const r = Math.min(3, rR.current + 0.25);
+      changeRate(r);
+      fb(`⬆ ${r.toFixed(2)}×`);
+    } else if (/slower|slow down/.test(c)) {
+      const r = Math.max(0.5, rR.current - 0.25);
+      changeRate(r);
+      fb(`⬇ ${r.toFixed(2)}×`);
+    } else if (/restart|beginning/.test(c)) {
+      playFrom(0);
+      fb("⏮ Restart");
+    } else if (/\bexplain\b/.test(c)) {
+      sAI(true);
+      fb("🤖 AI opened");
+    } else if (/\bbookmark\b/.test(c)) {
+      addBM();
+      fb("🔖 Bookmarked");
+    } else {
+      fb(`❓ "${raw.slice(0, 30)}"`);
+    }
+  }, [seek, toggle, stopAll, changeRate, playFrom, addBM, fb]);
+  const toggleMic = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      alert("Voice commands need Chrome.");
+      return;
+    }
+    if (micR.current) {
+      recR.current?.stop();
+      recR.current = null;
+      sMic(false);
+      micR.current = false;
+    } else {
+      const r = new SR();
+      r.continuous = true;
+      r.interimResults = false;
+      r.lang = "en-US";
+      r.onresult = e => doCmd(e.results[e.results.length - 1][0].transcript);
+      r.onerror = () => {
+        sMic(false);
+        micR.current = false;
+      };
+      r.onend = () => {
+        if (micR.current) try {
+          r.start();
+        } catch (e) {}
+      };
+      recR.current = r;
+      try {
+        r.start();
+        sMic(true);
+        micR.current = true;
+      } catch (e) {
+        alert("Mic error.");
+      }
+    }
+  }, [doCmd]);
+  useEffect(() => {
+    if (view !== "reader") return;
+    const h = e => {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
+      if (e.key === " ") {
+        e.preventDefault();
+        toggle();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        seek(e.shiftKey ? -30 : -10);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        seek(e.shiftKey ? 30 : 10);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        changeRate(Math.min(3, rR.current + 0.25));
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        changeRate(Math.max(0.5, rR.current - 0.25));
+      } else if (e.key === "b" || e.key === "B") addBM();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [view, toggle, seek, changeRate, addBM]);
+  useEffect(() => {
+    elR.current[wIdx]?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+  }, [wIdx]);
+  const renderText = () => {
+    if (!active) return null;
+    const wp = active.wpos;
+    const text = active.text;
+    const els = [];
+    let last = 0;
+    wp.forEach((w, i) => {
+      if (w.s > last) els.push(/*#__PURE__*/React.createElement("span", {
+        key: `s${i}`,
+        style: {
+          color: i <= wIdx ? C.pastTxt : C.txt,
+          whiteSpace: "pre-wrap"
+        }
+      }, text.slice(last, w.s)));
+      const a = i === wIdx,
+        p = i < wIdx;
+      els.push(/*#__PURE__*/React.createElement("span", {
+        key: `w${i}`,
+        ref: el => elR.current[i] = el,
+        onClick: () => playFrom(i),
+        title: "Read from here",
+        style: {
+          background: a ? C.acc : "transparent",
+          color: a ? C.bg : p ? C.pastTxt : C.txt,
+          borderRadius: 3,
+          padding: a ? "1px 4px" : 0,
+          fontWeight: a ? 700 : 400,
+          cursor: "pointer",
+          transition: "all 0.07s ease",
+          boxShadow: a ? `0 0 12px ${C.accGlow}` : "none"
+        }
+      }, w.w));
+      last = w.e;
+    });
+    if (last < text.length) els.push(/*#__PURE__*/React.createElement("span", {
+      key: "tail",
+      style: {
+        color: C.txt,
+        whiteSpace: "pre-wrap"
+      }
+    }, text.slice(last)));
+    return els;
+  };
+  const wpos = active?.wpos ?? [];
+  const wc = wpos.length;
+  const totalSec = wc / (WPS * rate);
+  const elapsed = wIdx >= 0 ? wIdx / (WPS * rate) : 0;
+  const remain = Math.max(0, totalSec - elapsed);
+  const pct = wIdx >= 0 ? wIdx / wc * 100 : 0;
+  const getCtx = () => {
+    if (!active) return "";
+    const wp = active.wpos;
+    const cur = wIdx >= 0 ? wIdx : 0;
+    const s = Math.max(0, cur - 250);
+    const e = Math.min(wp.length - 1, cur + 40);
+    return active.text.slice(wp[s]?.s ?? 0, wp[e]?.e ?? active.text.length);
+  };
+  if (view === "library") return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Library, {
+    books: books,
+    progMap: progMap,
+    onOpen: openBook,
+    onDelete: deleteBook,
+    onSave: saveBook,
+    onSetKey: () => sKeyModal(true)
+  }), showKeyModal && /*#__PURE__*/React.createElement(APIKeyModal, {
+    onSave: k => {
+      ST.set(K.key, k);
+      sApiKey(k);
+      sKeyModal(false);
+    },
+    note: "For the AI reading companion. Stored only in this browser."
+  }));
+  if (!active) {
+    sView("library");
+    return null;
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: "100vh",
+      background: C.bg,
+      color: C.txt,
+      fontFamily: "'Georgia',serif",
+      display: "flex",
+      flexDirection: "column"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "sticky",
+      top: 0,
+      zIndex: 20,
+      background: `${C.bg}f2`,
+      backdropFilter: "blur(12px)",
+      borderBottom: `1px solid ${C.bdr}`,
+      padding: "10px 14px",
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      stopAll();
+      sView("library");
+    },
+    style: {
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontSize: 22,
+      padding: 0,
+      flexShrink: 0
+    }
+  }, "←"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      marginBottom: 4,
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      maxWidth: "38%"
+    }
+  }, active.title), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: ttsMode === "openai" ? C.ai : ttsMode === "clone" ? C.cln : C.acc,
+      fontWeight: 800
+    }
+  }, ttsMode === "openai" ? "✨ OpenAI" : ttsMode === "clone" ? "🎤 " + (elVoiceName || "My Voice") : rate.toFixed(2) + "×"), /*#__PURE__*/React.createElement("span", null, pFmt(elapsed), " · ", pFmt(remain), " left")), /*#__PURE__*/React.createElement("div", {
+    onClick: e => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      playFrom(Math.floor(Math.max(0, (e.clientX - rect.left) / rect.width) * wpR.current.length));
+    },
+    style: {
+      height: 4,
+      background: C.surf,
+      borderRadius: 3,
+      cursor: "pointer",
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: "100%",
+      width: `${pct}%`,
+      background: ttsMode === "openai" ? C.ai : ttsMode === "clone" ? C.cln : C.acc,
+      transition: "width 0.3s",
+      borderRadius: 3
+    }
+  }))), /*#__PURE__*/React.createElement("button", {
+    onClick: addBM,
+    title: "Bookmark (B)",
+    style: {
+      background: "none",
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 8,
+      color: C.muted,
+      cursor: "pointer",
+      fontSize: 15,
+      padding: "5px 9px",
+      flexShrink: 0
+    }
+  }, "🔖"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => sShowBM(s => !s),
+    style: {
+      background: showBM ? C.surf : "none",
+      border: `1px solid ${showBM ? C.acc : C.bdr}`,
+      borderRadius: 8,
+      color: showBM ? C.acc : C.muted,
+      cursor: "pointer",
+      fontSize: 12,
+      padding: "5px 9px",
+      fontFamily: "sans-serif",
+      fontWeight: 700,
+      flexShrink: 0
+    }
+  }, bmarks.length, "🔖")), genBusy && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#0A1428",
+      borderBottom: `1px solid ${C.aiBdr}`,
+      padding: "8px 16px",
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: C.ai
+    }
+  }, /*#__PURE__*/React.createElement(Spin, null), /*#__PURE__*/React.createElement("span", null, "Generating HD audio…")), !bOk && (playing || paused) && ttsMode === "browser" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#1A1000",
+      borderBottom: `1px solid #4A3000`,
+      padding: "7px 16px",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      color: "#C8902A",
+      textAlign: "center"
+    }
+  }, "⚠️ Word highlights need Chrome — audio plays fine."), cmdFb && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      top: 68,
+      left: "50%",
+      transform: "translateX(-50%)",
+      background: C.surfB,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 24,
+      padding: "8px 22px",
+      fontFamily: "sans-serif",
+      fontSize: 14,
+      fontWeight: 700,
+      color: C.acc,
+      zIndex: 99,
+      boxShadow: "0 4px 20px #00000055",
+      pointerEvents: "none",
+      letterSpacing: 1
+    }
+  }, cmdFb), selTxt.length > 5 && !aiOpen && /*#__PURE__*/React.createElement("button", {
+    onClick: () => sAI(true),
+    style: {
+      position: "fixed",
+      right: 16,
+      top: "50%",
+      transform: "translateY(-50%)",
+      zIndex: 40,
+      background: C.ai,
+      border: "none",
+      borderRadius: 12,
+      padding: "10px 14px",
+      color: "#fff",
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      fontWeight: 700,
+      boxShadow: "0 4px 20px rgba(91,141,217,0.5)",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 4
+    }
+  }, "🤖", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      letterSpacing: 1
+    }
+  }, "EXPLAIN")), showBM && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      top: 64,
+      right: 0,
+      bottom: 0,
+      width: 272,
+      background: C.surf,
+      borderLeft: `1px solid ${C.bdr}`,
+      zIndex: 30,
+      overflowY: "auto",
+      padding: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontWeight: 800,
+      fontSize: 13,
+      color: C.acc,
+      marginBottom: 14,
+      letterSpacing: 1
+    }
+  }, "🔖 BOOKMARKS"), bmarks.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 13,
+      color: C.muted
+    }
+  }, "No bookmarks yet.", /*#__PURE__*/React.createElement("br", null), "Press B or tap 🔖") : bmarks.map(bm => /*#__PURE__*/React.createElement("div", {
+    key: bm.id,
+    style: {
+      marginBottom: 12,
+      background: C.surfB,
+      borderRadius: 8,
+      padding: "10px 12px",
+      cursor: "pointer"
+    },
+    onClick: () => {
+      playFrom(bm.wordIdx);
+      sShowBM(false);
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.muted,
+      marginBottom: 4
+    }
+  }, tAgo(bm.createdAt)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      lineHeight: 1.5,
+      color: C.txt
+    }
+  }, bm.context.slice(0, 90), "…"), /*#__PURE__*/React.createElement("button", {
+    onClick: e => {
+      e.stopPropagation();
+      delBM(bm.id);
+    },
+    style: {
+      background: "none",
+      border: "none",
+      color: C.muted,
+      cursor: "pointer",
+      fontSize: 11,
+      padding: 0,
+      marginTop: 6
+    }
+  }, "✕ Remove")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      padding: "36px 24px 175px",
+      maxWidth: 700,
+      margin: "0 auto",
+      width: "100%",
+      boxSizing: "border-box"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 19,
+      lineHeight: 2.1
+    }
+  }, renderText())), /*#__PURE__*/React.createElement("button", {
+    onClick: () => sAI(true),
+    style: {
+      position: "fixed",
+      right: 18,
+      bottom: 150,
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      background: C.ai,
+      border: "none",
+      color: "#fff",
+      cursor: "pointer",
+      fontSize: 22,
+      boxShadow: "0 4px 20px rgba(91,141,217,0.5)",
+      zIndex: 29,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center"
+    }
+  }, "🤖"), showHelp && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      bottom: 185,
+      left: "50%",
+      transform: "translateX(-50%)",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 12,
+      padding: "14px 18px",
+      zIndex: 40,
+      maxWidth: 430,
+      width: "calc(100% - 32px)",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      lineHeight: 1.8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      color: C.acc,
+      marginBottom: 8,
+      fontSize: 13,
+      letterSpacing: 1
+    }
+  }, "⌨ CONTROLS"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: C.muted
+    }
+  }, /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: C.txt
+    }
+  }, "Keys:"), " Space=⏯ · ←/→=±10s · Shift+←/→=±30s · ↑/↓=speed · B=bookmark", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: C.txt
+    }
+  }, "Click:"), " word to jump · bar to seek", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: C.txt
+    }
+  }, "Voice:"), " back·forward·pause·play·faster·slower·restart·explain·bookmark", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: C.txt
+    }
+  }, "AI:"), " select text → 🤖 button → ask anything")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      background: `linear-gradient(to top,${C.bg} 55%,transparent)`,
+      padding: "10px 14px 22px",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      justifyContent: "center",
+      alignItems: "center"
+    }
+  }, ttsMode === "browser" && RATES.map(r => /*#__PURE__*/React.createElement(Chip, {
+    key: r,
+    label: `${r}×`,
+    active: Math.abs(rate - r) < 0.05,
+    onClick: () => changeRate(r)
+  })), ttsMode === "openai" && RATES.map(r => /*#__PURE__*/React.createElement(Chip, {
+    key: r,
+    label: `${r}×`,
+    active: Math.abs(rate - r) < 0.05,
+    onClick: () => changeRate(r)
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => sShowVoice(true),
+    style: {
+      padding: "4px 12px",
+      borderRadius: 20,
+      background: ttsMode === "openai" ? C.ai : ttsMode === "clone" ? C.cln : C.surf,
+      color: ttsMode === "openai" || ttsMode === "clone" ? "#fff" : C.muted,
+      border: `1px solid ${ttsMode === "openai" ? C.ai : ttsMode === "clone" ? C.cln : C.bdr}`,
+      fontSize: 12,
+      fontFamily: "sans-serif",
+      cursor: "pointer"
+    }
+  }, ttsMode === "openai" ? "✨ OpenAI" : ttsMode === "clone" ? "🎤 " + (elVoiceName || "My Voice") : "🔊 Voice")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 20,
+      padding: "10px 16px",
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      boxShadow: "0 8px 32px #00000060"
+    }
+  }, /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => {
+      stopAll();
+      sView("library");
+    },
+    title: "Library",
+    w: 36,
+    h: 36,
+    muted: true
+  }, "📚"), /*#__PURE__*/React.createElement(Dvdr, null), /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => seek(-30),
+    w: 36,
+    h: 36,
+    style: {
+      fontSize: 12
+    }
+  }, "−30s"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => seek(-10),
+    w: 40,
+    h: 40,
+    style: {
+      fontSize: 13
+    }
+  }, "−10s"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: toggle,
+    w: 56,
+    h: 56,
+    accent: true,
+    style: genBusy ? {
+      opacity: 0.6
+    } : {}
+  }, playing ? "⏸" : "▶"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => seek(10),
+    w: 40,
+    h: 40,
+    style: {
+      fontSize: 13
+    }
+  }, "+10s"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => seek(30),
+    w: 36,
+    h: 36,
+    style: {
+      fontSize: 12
+    }
+  }, "+30s"), /*#__PURE__*/React.createElement(Dvdr, null), /*#__PURE__*/React.createElement(Btn, {
+    onClick: stopAll,
+    w: 36,
+    h: 36,
+    muted: true
+  }, "⏹"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => playFrom(0),
+    w: 36,
+    h: 36,
+    muted: true
+  }, "⏮"), /*#__PURE__*/React.createElement(Dvdr, null), /*#__PURE__*/React.createElement(Btn, {
+    onClick: toggleMic,
+    w: 36,
+    h: 36,
+    style: {
+      background: micOn ? "#2A0F0F" : "none",
+      borderColor: micOn ? C.red : C.bdr,
+      color: micOn ? C.red : C.muted,
+      animation: micOn ? "pulseFx 1.4s ease infinite" : "none"
+    }
+  }, "🎤"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: () => sHelp(s => !s),
+    w: 36,
+    h: 36,
+    active: showHelp,
+    muted: true
+  }, "?")), micOn && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "sans-serif",
+      fontSize: 11,
+      color: C.red,
+      letterSpacing: 1,
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      width: 6,
+      height: 6,
+      borderRadius: "50%",
+      background: C.red,
+      animation: "pulseFx 1s ease infinite"
+    }
+  }), "LISTENING")), aiOpen && /*#__PURE__*/React.createElement(AIPanel, {
+    onClose: () => {
+      sAI(false);
+      sSelTxt("");
+    },
+    context: getCtx(),
+    selText: selTxt,
+    bookTitle: active.title,
+    apiKey: apiKey
+  }), showKeyModal && /*#__PURE__*/React.createElement(APIKeyModal, {
+    onSave: k => {
+      ST.set(K.key, k);
+      sApiKey(k);
+      sKeyModal(false);
+    },
+    note: "Anthropic key for AI companion. Stored only in this browser."
+  }), showVoice && /*#__PURE__*/React.createElement(VoicePanel, {
+    ttsMode: ttsMode,
+    setTtsMode: sTtsMode,
+    oaiKey: oaiKey,
+    setOaiKey: sOaiKey,
+    oaiVoice: oaiVoice,
+    setOaiVoice: sOaiVoice,
+    browserVoices: voices,
+    browserVoiceIdx: vIdx,
+    setBrowserVoiceIdx: sVIdx,
+    elKey: elKey,
+    setElKey: sElKey,
+    elVoiceId: elVoiceId,
+    setElVoiceId: sElVoiceId,
+    elVoiceName: elVoiceName,
+    setElVoiceName: sElVoiceName,
+    onClose: () => sShowVoice(false)
+  }));
+}
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App, null));
+
+</script>
+</html>
