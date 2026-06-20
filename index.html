@@ -97,6 +97,7 @@
 <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0B1219;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
@@ -270,6 +271,44 @@ const readPDF = async file => {
     const pg = await pdf.getPage(i);
     const ct = await pg.getTextContent();
     out += ct.items.map(x => x.str).join(" ").trim() + "\n\n";
+  }
+  return out.trim();
+};
+const readEPUB = async file => {
+  if (!window.JSZip) throw new Error("EPUB reader not ready yet.");
+  const buf = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(buf);
+  // Find OPF path via META-INF/container.xml
+  const containerXml = await zip.file("META-INF/container.xml")?.async("text");
+  if (!containerXml) throw new Error("Invalid EPUB: missing container.xml");
+  const opfPath = containerXml.match(/full-path="([^"]+\.opf)"/i)?.[1];
+  if (!opfPath) throw new Error("Invalid EPUB: cannot find content OPF");
+  const opfDir = opfPath.includes("/") ? opfPath.substring(0, opfPath.lastIndexOf("/") + 1) : "";
+  const opfXml = await zip.file(opfPath)?.async("text");
+  if (!opfXml) throw new Error("Invalid EPUB: cannot read OPF manifest");
+  // Build id→href manifest
+  const manifest = {};
+  for (const m of opfXml.matchAll(/<item[^>]+id="([^"]*)"[^>]+href="([^"]*)"[^>]*\/>/gi))
+    manifest[m[1]] = m[2];
+  for (const m of opfXml.matchAll(/<item[^>]+href="([^"]*)"[^>]+id="([^"]*)"[^>]*\/>/gi))
+    manifest[m[2]] = m[1];
+  // Get spine reading order
+  const spineIds = [...opfXml.matchAll(/<itemref[^>]+idref="([^"]+)"/gi)].map(m => m[1]);
+  const stripHtml = html => html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ").trim();
+  let out = "";
+  for (const id of spineIds) {
+    const href = manifest[id];
+    if (!href) continue;
+    const html = await (zip.file(opfDir + href) ?? zip.file(href))?.async("text");
+    if (!html) continue;
+    const t = stripHtml(html);
+    if (t) out += t + "\n\n";
   }
   return out.trim();
 };
@@ -1613,6 +1652,7 @@ function Library({
   const [body, sBody] = useState("");
   const [pdfErr, sPdfErr] = useState("");
   const [pdfBusy, sPdfBusy] = useState(false);
+  const [epubBusy, sEpubBusy] = useState(false);
   const doPDF = async file => {
     if (!file) return;
     sPdfErr("");
@@ -1625,6 +1665,19 @@ function Library({
       sPdfErr(e.message);
     }
     sPdfBusy(false);
+  };
+  const doEPUB = async file => {
+    if (!file) return;
+    sPdfErr("");
+    sEpubBusy(true);
+    try {
+      const t = await readEPUB(file);
+      const nm = file.name.replace(/\.epub$/i, "").replace(/[_-]+/g, " ");
+      onSave(nm || "Untitled", t);
+    } catch (e) {
+      sPdfErr(e.message);
+    }
+    sEpubBusy(false);
   };
   if (mode === "add") return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1837,6 +1890,36 @@ function Library({
       display: "none"
     },
     onChange: e => doPDF(e.target.files?.[0])
+  })), /*#__PURE__*/React.createElement("label", {
+    style: {
+      padding: "16px 10px",
+      background: C.surf,
+      border: `1px solid ${C.bdr}`,
+      borderRadius: 12,
+      color: C.txt,
+      cursor: "pointer",
+      fontFamily: "sans-serif",
+      fontSize: 12,
+      fontWeight: 600,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 7,
+      transition: "border-color 0.2s"
+    },
+    onMouseEnter: e => e.currentTarget.style.borderColor = C.accDim,
+    onMouseLeave: e => e.currentTarget.style.borderColor = C.bdr
+  }, epubBusy ? /*#__PURE__*/React.createElement(Spin, null) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 24
+    }
+  }, "📖"), /*#__PURE__*/React.createElement("span", null, epubBusy ? "Reading…" : "Upload EPUB"), /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".epub",
+    style: {
+      display: "none"
+    },
+    onChange: e => doEPUB(e.target.files?.[0])
   })), /*#__PURE__*/React.createElement("button", {
     onClick: onSetKey,
     style: {
