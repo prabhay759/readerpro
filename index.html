@@ -2211,6 +2211,7 @@ function App() {
   const [connStatus, sConnStatus] = useState({ el: null, ai: null });
   const [showConnBar, sShowConnBar] = useState(false);
   const [pageIdx, sPageIdx] = useState(0);
+  const [ecoWake, sEcoWake] = useState(false);
 
   // Refs
   const rR = useRef(1);
@@ -2230,6 +2231,8 @@ function App() {
   const wakeOnR = useRef(false);
   const awaitingCmdR = useRef(false);
   const cmdTimeoutR = useRef(null);
+  const ecoWakeR = useRef(false);
+  const ecoTimerR = useRef(null);
   const pausedForVisR = useRef(false);
   const playFromR = useRef(null);
   const doCmdR = useRef(null);
@@ -3023,17 +3026,29 @@ function App() {
   }, []);
 
   // ── Wake word recognizer ("Hey Book" → listen for command) ───────────────
+  // Broad fuzzy pattern covering common SpeechRecognition mishearings
+  const WAKE_RE = /\b(hey|ok|okay|hi|a|the|k)\s*boo?[ck]s?\b|\bhay\s*book|\bk\s*book|\bpay\s*book/i;
   const startWakeRec = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return;
     const r = new SR();
     r.continuous = true;
-    r.interimResults = false;
+    r.interimResults = true;    // detect wake word the moment it's spoken, not after pause
+    r.maxAlternatives = 3;      // 3 guesses per phrase — catches mishearings
     r.lang = "en-US";
+
+    const checkAlts = results => {
+      for (let ri = 0; ri < results.length; ri++)
+        for (let ai = 0; ai < results[ri].length; ai++)
+          if (WAKE_RE.test(results[ri][ai].transcript)) return true;
+      return false;
+    };
+
     r.onresult = e => {
-      const t = e.results[e.results.length - 1][0].transcript;
-      const lc = t.toLowerCase();
-      const hasWake = /hey book|ok book|hey books/.test(lc);
+      // Collect new results since last event
+      const newResults = Array.from(e.results).slice(e.resultIndex);
+      const hasWake = checkAlts(newResults);
+
       if (hasWake && !awaitingCmdR.current) {
         awaitingCmdR.current = true;
         sCmdListening(true);
@@ -3042,18 +3057,54 @@ function App() {
         cmdTimeoutR.current = setTimeout(() => {
           awaitingCmdR.current = false;
           sCmdListening(false);
-        }, 5000);
-      } else if (awaitingCmdR.current) {
-        awaitingCmdR.current = false;
-        sCmdListening(false);
-        clearTimeout(cmdTimeoutR.current);
-        doCmdR.current?.(t);
+        }, 6000);
+        return;
+      }
+
+      if (awaitingCmdR.current) {
+        // Wait for a final (non-interim) result to get the full command
+        const finalResult = newResults.find(r => r.isFinal);
+        if (finalResult) {
+          // Use the best alternative that doesn't look like just the wake word itself
+          const cmd = finalResult[0].transcript.trim();
+          const cleanCmd = cmd.replace(WAKE_RE, '').trim() || cmd;
+          if (cleanCmd) {
+            awaitingCmdR.current = false;
+            sCmdListening(false);
+            clearTimeout(cmdTimeoutR.current);
+            doCmdR.current?.(cleanCmd);
+          }
+        }
       }
     };
-    r.onerror = () => {};
-    r.onend = () => { if (wakeOnR.current) try { r.start(); } catch(er) {} };
+
+    r.onerror = e => { if (e.error === 'no-speech') return; }; // ignore silence
+    r.onend = () => {
+      if (!wakeOnR.current) return;
+      if (ecoWakeR.current) {
+        // Eco mode: pause 4s then restart for 8s
+        ecoTimerR.current = setTimeout(() => {
+          if (!wakeOnR.current) return;
+          try { r.start(); } catch(er) {}
+          ecoTimerR.current = setTimeout(() => {
+            if (wakeOnR.current) try { r.stop(); } catch(er) {}
+          }, 8000);
+        }, 4000);
+      } else {
+        // Normal mode: restart immediately (tiny browser gap is unavoidable)
+        try { r.start(); } catch(er) {}
+      }
+    };
+
     wakeRecR.current = r;
     try { r.start(); } catch(er) {}
+    if (ecoWakeR.current) {
+      // In eco mode, stop after 8s — onend will schedule the next cycle
+      clearTimeout(ecoTimerR.current);
+      ecoTimerR.current = setTimeout(() => {
+        if (wakeOnR.current) try { r.stop(); } catch(er) {}
+      }, 8000);
+    }
   }, [speakOut]);
 
   const toggleWake = useCallback(() => {
@@ -3061,6 +3112,7 @@ function App() {
     if (!SR) { alert("Wake word needs Chrome."); return; }
     if (wakeOnR.current) {
       clearTimeout(cmdTimeoutR.current);
+      clearTimeout(ecoTimerR.current);
       wakeRecR.current?.stop();
       wakeRecR.current = null;
       wakeOnR.current = false;
@@ -3071,6 +3123,18 @@ function App() {
       startWakeRec();
       wakeOnR.current = true;
       sWakeOn(true);
+    }
+  }, [startWakeRec]);
+  const toggleEcoWake = useCallback(() => {
+    const next = !ecoWakeR.current;
+    ecoWakeR.current = next;
+    sEcoWake(next);
+    // If already listening, restart with new mode
+    if (wakeOnR.current) {
+      clearTimeout(ecoTimerR.current);
+      wakeRecR.current?.stop();
+      wakeRecR.current = null;
+      setTimeout(startWakeRec, 200);
     }
   }, [startWakeRec]);
 
@@ -3722,6 +3786,17 @@ function App() {
       fontWeight: 800
     }
   }, "HB"), /*#__PURE__*/React.createElement(Btn, {
+    onClick: toggleEcoWake,
+    w: 36,
+    h: 36,
+    title: ecoWake ? "Eco wake: 8s on / 4s off — tap to go always-on" : "Always-on wake — tap for Eco (battery saving)",
+    style: {
+      background: ecoWake ? "#181008" : "none",
+      borderColor: ecoWake ? "#B87D2A" : C.bdr,
+      color: ecoWake ? "#B87D2A" : C.muted,
+      fontSize: 13
+    }
+  }, "🔋"), /*#__PURE__*/React.createElement(Btn, {
     onClick: toggleDriving,
     w: 36,
     h: 36,
