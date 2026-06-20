@@ -197,9 +197,7 @@ const SAMPLE_TEXT = `The secret of getting ahead is getting started. The best ti
 It does not matter how slowly you go as long as you do not stop. Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time. Success is not final; failure is not fatal — it is the courage to continue that counts.
 
 You are never too old to set a new goal or to dream a new dream. The future belongs to those who believe in the beauty of their dreams. Know that there is something inside you that is greater than any obstacle.`;
-// Replaced at Netlify build time — do not edit these strings
-const _NL_ELEVEN_KEY = "NETLIFY_INJECTED_EL_KEY";
-const _NL_AI_KEY = "NETLIFY_INJECTED_AI_KEY";
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 const pFmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const tAgo = iso => {
@@ -251,21 +249,11 @@ const ST = {
     }
   }
 };
-const callAI = async (messages, system, apiKey) => {
-  const r = await fetch("https://aki.io/v1/chat/completions", {
+const callAI = async (messages, system) => {
+  const r = await fetch("/api/ai", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: 1000,
-      messages: [
-        ...(system ? [{ role: "system", content: system }] : []),
-        ...messages
-      ]
-    })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, system })
   });
   const d = await r.json();
   if (d.error) throw new Error(d.error.message);
@@ -508,17 +496,6 @@ function AIPanel({
   const sys = `You are a reading companion for BookLens.\nReading: "${bookTitle || "a text"}".\nRecent text:\n"""\n${context}\n"""\nBe concise but insightful. Use **bold** for key terms.`;
   const send = async txt => {
     if (!txt.trim() || busy) return;
-    if (!apiKey) {
-      sM(m => [...m, {
-        role: "user",
-        content: txt
-      }, {
-        role: "assistant",
-        content: "⚠️ No Anthropic API key. Tap ⚙ API Key in the library."
-      }]);
-      sI("");
-      return;
-    }
     const um = {
       role: "user",
       content: txt
@@ -531,7 +508,7 @@ function AIPanel({
       const r = await callAI(nxt.map(m => ({
         role: m.role,
         content: m.content
-      })), sys, apiKey);
+      })), sys);
       sM(m => [...m, {
         role: "assistant",
         content: r
@@ -824,18 +801,15 @@ function VoiceCloneCard({
     });
   };
   const createClone = async () => {
-    if (!elKey || samples.length === 0) return;
+    if (samples.length === 0) return;
     sBusy(true);
     sErr("");
     try {
       const fd = new FormData();
       fd.append("name", cloneName.trim() || "My Voice");
       samples.forEach((s, i) => fd.append("files", s.blob, s.label.replace(/\s+/g, "_") + (s.blob.type?.includes("mp4") ? ".mp4" : s.blob.type?.includes("ogg") ? ".ogg" : s.blob.type?.includes("mpeg") || s.blob.type?.includes("mp3") ? ".mp3" : s.blob.type?.includes("wav") ? ".wav" : ".webm")));
-      const res = await fetch("https://api.elevenlabs.io/v1/voices/add", {
+      const res = await fetch("/api/elevenlabs?ep=add", {
         method: "POST",
-        headers: {
-          "xi-api-key": elKey
-        },
         body: fd
       });
       if (!res.ok) {
@@ -852,14 +826,13 @@ function VoiceCloneCard({
     sBusy(false);
   };
   const testClone = async () => {
-    if (!elKey || !elVoiceId) return;
+    if (!elVoiceId) return;
     sTestBusy(true);
     sErr("");
     try {
-      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoiceId}`, {
+      const res = await fetch(`/api/elevenlabs?ep=tts&vid=${elVoiceId}`, {
         method: "POST",
         headers: {
-          "xi-api-key": elKey,
           "Content-Type": "application/json",
           "Accept": "audio/mpeg"
         },
@@ -890,11 +863,8 @@ function VoiceCloneCard({
     if (!confirm("Delete this voice clone? You'll need to record again to recreate it.")) return;
     sBusy(true);
     try {
-      await fetch(`https://api.elevenlabs.io/v1/voices/${elVoiceId}`, {
-        method: "DELETE",
-        headers: {
-          "xi-api-key": elKey
-        }
+      await fetch(`/api/elevenlabs?ep=del&vid=${elVoiceId}`, {
+        method: "DELETE"
       });
     } catch (e) {}
     setElVoiceId("");
@@ -2100,7 +2070,7 @@ function App() {
   const [ttsMode, sTtsMode] = useState(() => ST.get(K.ttsmode, "browser"));
   const [oaiKey, sOaiKey] = useState(() => ST.get(K.oaikey, ""));
   const [oaiVoice, sOaiVoice] = useState(() => ST.get(K.oaivoice, "nova"));
-  const [elKey, sElKey] = useState(() => ST.get(K.elkey, "") || (_NL_ELEVEN_KEY !== "NETLIFY_INJECTED_EL_KEY" ? _NL_ELEVEN_KEY : ""));
+  const [elKey, sElKey] = useState(() => ST.get(K.elkey, ""));
   const [elVoiceId, sElVoiceId] = useState(() => ST.get(K.elvid, ""));
   const [elVoiceName, sElVoiceName] = useState(() => ST.get(K.elname, ""));
   const [showVoice, sShowVoice] = useState(false);
@@ -2222,12 +2192,8 @@ function App() {
     for (const b of lib) pm[b.id] = ST.get(K.prog(b.id), 0);
     sBooks(lib);
     sProg(pm);
-    const k = ST.get(K.key, "") || (_NL_AI_KEY !== "NETLIFY_INJECTED_AI_KEY" ? _NL_AI_KEY : "");
-    if (k) {
-      sApiKey(k);
-      apiKeyR.current = k;
-      if (!ST.get(K.key, "")) ST.set(K.key, k);
-    }
+    const k = ST.get(K.key, "");
+    if (k) { sApiKey(k); apiKeyR.current = k; }
     setTimeout(checkConn, 150);
     return () => {
       window.speechSynthesis.cancel();
@@ -2255,13 +2221,11 @@ function App() {
     sShowConnBar(true);
     sConnStatus({ el: null, ai: null });
     const tryEl = async () => {
-      if (!elKeyR.current) return false;
-      try { const r = await fetch("https://api.elevenlabs.io/v1/models", { headers: { "xi-api-key": elKeyR.current } }); return r.ok; }
+      try { const r = await fetch("/api/elevenlabs?ep=health"); const d = await r.json(); return d.ok === true; }
       catch { return false; }
     };
     const tryAI = async () => {
-      if (!apiKeyR.current) return false;
-      try { const r = await fetch("https://aki.io/v1/models", { headers: { "Authorization": `Bearer ${apiKeyR.current}` } }); return r.ok; }
+      try { const r = await fetch("/api/ai"); const d = await r.json(); return d.ok === true; }
       catch { return false; }
     };
     const [el, ai] = await Promise.all([tryEl(), tryAI()]);
@@ -2553,10 +2517,9 @@ function App() {
       if (stopFlagR.current || !plR.current) break;
       sGenBusy(true);
       try {
-        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoiceIdR.current}`, {
+        const res = await fetch(`/api/elevenlabs?ep=tts&vid=${elVoiceIdR.current}`, {
           method: "POST",
           headers: {
-            "xi-api-key": elKeyR.current,
             "Content-Type": "application/json",
             "Accept": "audio/mpeg"
           },
@@ -2804,16 +2767,13 @@ function App() {
 
   // Call AI and read the response aloud, pausing and resuming the book
   const aiSpeak = useCallback(async (prompt, sysPrompt) => {
-    const key = apiKeyR.current || ST.get(K.key, '');
-    if (!key) { speakOut('No AI key configured'); return; }
     const info = pauseForSpeak();
     speakOut('Getting answer');
     try {
       const ctx = getCtxForAI();
       const resp = await callAI(
         [{ role: 'user', content: prompt }],
-        sysPrompt || `You are a reading companion for a driver. Recent text:\n"""\n${ctx}\n"""\nBe brief — 2 to 3 sentences, conversational, easy to follow by ear.`,
-        key
+        sysPrompt || `You are a reading companion for a driver. Recent text:\n"""\n${ctx}\n"""\nBe brief — 2 to 3 sentences, conversational, easy to follow by ear.`
       );
       const clean = resp.replace(/\*\*/g, '').replace(/\*/g, '').trim();
       speakOut(clean, () => resumeAfterSpeak(info));
