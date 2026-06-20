@@ -3586,6 +3586,21 @@ function App() {
     /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 16, justifyContent: "center" } },
       /*#__PURE__*/React.createElement("button", { onClick: () => goPage(-1), style: { padding: "10px 28px", borderRadius: 10, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 14, fontWeight: 700 } }, "← Prev Page"),
       /*#__PURE__*/React.createElement("button", { onClick: () => goPage(1), style: { padding: "10px 28px", borderRadius: 10, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 14, fontWeight: 700 } }, "Next Page →")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, justifyContent: "center" } },
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => changeRate(Math.max(0.5, Math.round((rR.current - 0.25) * 4) / 4)),
+        style: { width: 64, height: 64, borderRadius: 32, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 24, fontWeight: 700 }
+      }, "−"),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => changeRate(1),
+        title: "Reset to 1×",
+        style: { minWidth: 90, padding: "0 12px", height: 64, borderRadius: 12, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 18, fontWeight: 700 }
+      }, `${rate.toFixed(2)}×`),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => changeRate(Math.min(3, Math.round((rR.current + 0.25) * 4) / 4)),
+        style: { width: 64, height: 64, borderRadius: 32, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 24, fontWeight: 700 }
+      }, "+")
     )
   ), /*#__PURE__*/React.createElement("button", {
     onClick: () => sAI(true),
@@ -3669,21 +3684,28 @@ function App() {
     style: {
       display: "flex",
       gap: 6,
-      flexWrap: "wrap",
+      flexWrap: "nowrap",
+      overflowX: "auto",
+      width: "100%",
       justifyContent: "center",
-      alignItems: "center"
+      alignItems: "center",
+      WebkitOverflowScrolling: "touch"
     }
-  }, ttsMode === "browser" && RATES.map(r => /*#__PURE__*/React.createElement(Chip, {
-    key: r,
-    label: `${r}×`,
-    active: Math.abs(rate - r) < 0.05,
-    onClick: () => changeRate(r)
-  })), ttsMode === "openai" && RATES.map(r => /*#__PURE__*/React.createElement(Chip, {
-    key: r,
-    label: `${r}×`,
-    active: Math.abs(rate - r) < 0.05,
-    onClick: () => changeRate(r)
-  })), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, flexShrink: 0 } },
+    /*#__PURE__*/React.createElement("button", {
+      onClick: () => changeRate(Math.max(0.5, Math.round((rR.current - 0.25) * 4) / 4)),
+      style: { width: 28, height: 28, borderRadius: 14, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }
+    }, "−"),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: () => changeRate(1),
+      title: "Reset to 1×",
+      style: { minWidth: 52, padding: "0 6px", height: 28, borderRadius: 14, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 13, fontWeight: 700 }
+    }, `${rate.toFixed(2)}×`),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: () => changeRate(Math.min(3, Math.round((rR.current + 0.25) * 4) / 4)),
+      style: { width: 28, height: 28, borderRadius: 14, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }
+    }, "+")
+  ), /*#__PURE__*/React.createElement("button", {
     onClick: () => sShowVoice(true),
     style: {
       padding: "4px 12px",
@@ -3704,7 +3726,10 @@ function App() {
       display: "flex",
       alignItems: "center",
       gap: 8,
-      boxShadow: "0 8px 32px #00000060"
+      boxShadow: "0 8px 32px #00000060",
+      overflowX: "auto",
+      maxWidth: "calc(100vw - 28px)",
+      WebkitOverflowScrolling: "touch"
     }
   }, /*#__PURE__*/React.createElement(Btn, {
     onClick: () => {
