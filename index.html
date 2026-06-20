@@ -197,6 +197,8 @@ const SAMPLE_TEXT = `The secret of getting ahead is getting started. The best ti
 It does not matter how slowly you go as long as you do not stop. Our greatest weakness lies in giving up. The most certain way to succeed is always to try just one more time. Success is not final; failure is not fatal — it is the courage to continue that counts.
 
 You are never too old to set a new goal or to dream a new dream. The future belongs to those who believe in the beauty of their dreams. Know that there is something inside you that is greater than any obstacle.`;
+// Replaced at Netlify build time — do not edit this string
+const _NL_ELEVEN_KEY = "NETLIFY_INJECTED_EL_KEY";
 const uid = () => Math.random().toString(36).slice(2, 10);
 const pFmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const tAgo = iso => {
@@ -2060,7 +2062,7 @@ function App() {
   const [ttsMode, sTtsMode] = useState(() => ST.get(K.ttsmode, "browser"));
   const [oaiKey, sOaiKey] = useState(() => ST.get(K.oaikey, ""));
   const [oaiVoice, sOaiVoice] = useState(() => ST.get(K.oaivoice, "nova"));
-  const [elKey, sElKey] = useState(() => ST.get(K.elkey, ""));
+  const [elKey, sElKey] = useState(() => ST.get(K.elkey, "") || (_NL_ELEVEN_KEY !== "NETLIFY_INJECTED_EL_KEY" ? _NL_ELEVEN_KEY : ""));
   const [elVoiceId, sElVoiceId] = useState(() => ST.get(K.elvid, ""));
   const [elVoiceName, sElVoiceName] = useState(() => ST.get(K.elname, ""));
   const [showVoice, sShowVoice] = useState(false);
