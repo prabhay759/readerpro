@@ -219,6 +219,7 @@ const pWords = t => {
   });
   return o;
 };
+const PAGE_SIZE = 500; // words rendered per page
 const K = {
   lib: "bl:lib",
   text: id => `bl:tx:${id}`,
@@ -2180,6 +2181,7 @@ function App() {
   const [cmdListening, sCmdListening] = useState(false);
   const [connStatus, sConnStatus] = useState({ el: null, ai: null });
   const [showConnBar, sShowConnBar] = useState(false);
+  const [pageIdx, sPageIdx] = useState(0);
 
   // Refs
   const rR = useRef(1);
@@ -2202,6 +2204,7 @@ function App() {
   const pausedForVisR = useRef(false);
   const playFromR = useRef(null);
   const doCmdR = useRef(null);
+  const pageIdxR = useRef(0);
   const apiKeyR = useRef('');
   const elR = useRef({});
   const saveT = useRef(null);
@@ -2300,6 +2303,28 @@ function App() {
     load();
     window.speechSynthesis.onvoiceschanged = load;
   }, []);
+  // Auto-advance page when TTS playback crosses a page boundary
+  useEffect(() => {
+    if (wIdx < 0) return;
+    const np = Math.floor(wIdx / PAGE_SIZE);
+    if (np !== pageIdxR.current) {
+      pageIdxR.current = np;
+      sPageIdx(np);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [wIdx]);
+  const goPage = useCallback(delta => {
+    const wp = wpR.current;
+    if (!wp.length) return;
+    const total = Math.ceil(wp.length / PAGE_SIZE);
+    const np = Math.max(0, Math.min(total - 1, pageIdxR.current + delta));
+    pageIdxR.current = np;
+    sPageIdx(np);
+    const startWord = np * PAGE_SIZE;
+    wR.current = startWord;
+    sWIdx(startWord);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
   const checkConn = useCallback(async () => {
     sShowConnBar(true);
     sConnStatus({ el: null, ai: null });
@@ -2350,6 +2375,9 @@ function App() {
     sBmarks(bm);
     sWIdx(pg);
     wR.current = pg;
+    const ip = Math.floor(pg / PAGE_SIZE);
+    pageIdxR.current = ip;
+    sPageIdx(ip);
     sView("reader");
   }, []);
   const saveBook = useCallback((title, text) => {
@@ -2929,10 +2957,14 @@ function App() {
       } else { fb("❓ Define what?"); }
     } else if (/\bbookmark\b/.test(c)) {
       addBM(); fb("🔖 Bookmarked");
+    } else if (/next page/.test(c)) {
+      goPage(1); fb("📖 Next page");
+    } else if (/prev(ious)? page|back.*page/.test(c)) {
+      goPage(-1); fb("📖 Prev page");
     } else {
       fb(`❓ "${raw.slice(0, 25)}"`);
     }
-  }, [seek, toggle, stopAll, changeRate, playFrom, addBM, fb, repeatThat, skipChapter, pauseForSpeak, speakOut, resumeAfterSpeak, aiSpeak]);
+  }, [seek, toggle, stopAll, changeRate, playFrom, addBM, fb, repeatThat, skipChapter, pauseForSpeak, speakOut, resumeAfterSpeak, aiSpeak, goPage]);
   useEffect(() => { doCmdR.current = doCmd; }, [doCmd]);
   const toggleMic = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3072,18 +3104,19 @@ function App() {
     if (!active) return null;
     const wp = active.wpos;
     const text = active.text;
+    const wStart = pageIdx * PAGE_SIZE;
+    const wEnd = Math.min(wp.length, wStart + PAGE_SIZE);
+    if (wStart >= wp.length) return null;
     const els = [];
-    let last = 0;
-    wp.forEach((w, i) => {
+    // Start from end of previous page's last word (preserves whitespace at page boundary)
+    let last = wStart === 0 ? 0 : (wp[wStart - 1]?.e ?? 0);
+    for (let i = wStart; i < wEnd; i++) {
+      const w = wp[i];
       if (w.s > last) els.push(/*#__PURE__*/React.createElement("span", {
         key: `s${i}`,
-        style: {
-          color: i <= wIdx ? C.pastTxt : C.txt,
-          whiteSpace: "pre-wrap"
-        }
+        style: { color: i <= wIdx ? C.pastTxt : C.txt, whiteSpace: "pre-wrap" }
       }, text.slice(last, w.s)));
-      const a = i === wIdx,
-        p = i < wIdx;
+      const a = i === wIdx, p = i < wIdx;
       els.push(/*#__PURE__*/React.createElement("span", {
         key: `w${i}`,
         ref: el => elR.current[i] = el,
@@ -3092,23 +3125,20 @@ function App() {
         style: {
           background: a ? C.acc : "transparent",
           color: a ? C.bg : p ? C.pastTxt : C.txt,
-          borderRadius: 3,
-          padding: a ? "1px 4px" : 0,
-          fontWeight: a ? 700 : 400,
-          cursor: "pointer",
+          borderRadius: 3, padding: a ? "1px 4px" : 0,
+          fontWeight: a ? 700 : 400, cursor: "pointer",
           transition: "all 0.07s ease",
           boxShadow: a ? `0 0 12px ${C.accGlow}` : "none"
         }
       }, w.w));
       last = w.e;
-    });
-    if (last < text.length) els.push(/*#__PURE__*/React.createElement("span", {
+    }
+    // Trailing whitespace up to start of next page (or end of text)
+    const charEnd = wEnd < wp.length ? wp[wEnd].s : text.length;
+    if (last < charEnd) els.push(/*#__PURE__*/React.createElement("span", {
       key: "tail",
-      style: {
-        color: C.txt,
-        whiteSpace: "pre-wrap"
-      }
-    }, text.slice(last)));
+      style: { color: C.txt, whiteSpace: "pre-wrap" }
+    }, text.slice(last, charEnd)));
     return els;
   };
   const wpos = active?.wpos ?? [];
@@ -3399,7 +3429,25 @@ function App() {
       width: "100%",
       boxSizing: "border-box"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, (() => {
+    const wp = active?.wpos ?? [];
+    const totalPages = Math.ceil(wp.length / PAGE_SIZE) || 1;
+    return /*#__PURE__*/React.createElement("div", {
+      style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, fontFamily: "sans-serif" }
+    },
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => goPage(-1),
+        disabled: pageIdx === 0,
+        style: { background: pageIdx === 0 ? "none" : C.surf, border: `1px solid ${pageIdx === 0 ? "transparent" : C.bdr}`, borderRadius: 8, color: pageIdx === 0 ? C.muted : C.txt, cursor: pageIdx === 0 ? "default" : "pointer", padding: "6px 14px", fontSize: 13, fontWeight: 600 }
+      }, "← Prev"),
+      /*#__PURE__*/React.createElement("span", { style: { color: C.muted, fontSize: 12, letterSpacing: 0.5 } }, `Page ${pageIdx + 1} / ${totalPages}`),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => goPage(1),
+        disabled: pageIdx >= totalPages - 1,
+        style: { background: pageIdx >= totalPages - 1 ? "none" : C.surf, border: `1px solid ${pageIdx >= totalPages - 1 ? "transparent" : C.bdr}`, borderRadius: 8, color: pageIdx >= totalPages - 1 ? C.muted : C.txt, cursor: pageIdx >= totalPages - 1 ? "default" : "pointer", padding: "6px 14px", fontSize: 13, fontWeight: 600 }
+      }, "Next →")
+    );
+  })(), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 19,
       lineHeight: 2.1
@@ -3435,6 +3483,10 @@ function App() {
       /*#__PURE__*/React.createElement("button", { onClick: () => seek(-30), style: { width: 90, height: 90, borderRadius: 45, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 15, fontWeight: 700, flexShrink: 0 } }, "−30s"),
       /*#__PURE__*/React.createElement("button", { onClick: toggle, style: { width: 120, height: 120, borderRadius: 60, background: C.acc, border: "none", color: C.bg, cursor: "pointer", fontSize: 48, flexShrink: 0, boxShadow: `0 0 32px ${C.accGlow}` } }, playing ? "⏸" : "▶"),
       /*#__PURE__*/React.createElement("button", { onClick: () => seek(30), style: { width: 90, height: 90, borderRadius: 45, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 15, fontWeight: 700, flexShrink: 0 } }, "+30s")
+    ),
+    /*#__PURE__*/React.createElement("div", { style: { display: "flex", gap: 16, justifyContent: "center" } },
+      /*#__PURE__*/React.createElement("button", { onClick: () => goPage(-1), style: { padding: "10px 28px", borderRadius: 10, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 14, fontWeight: 700 } }, "← Prev Page"),
+      /*#__PURE__*/React.createElement("button", { onClick: () => goPage(1), style: { padding: "10px 28px", borderRadius: 10, background: C.surfB, border: `1px solid ${C.bdr}`, color: C.txt, cursor: "pointer", fontFamily: "sans-serif", fontSize: 14, fontWeight: 700 } }, "Next Page →")
     )
   ), /*#__PURE__*/React.createElement("button", {
     onClick: () => sAI(true),
