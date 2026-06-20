@@ -220,6 +220,35 @@ const pWords = t => {
   return o;
 };
 const PAGE_SIZE = 500; // words rendered per page
+// Binary search: find which word in wp[] contains charPos (O log n)
+const bsearchWord = (wp, charPos) => {
+  let lo = 0, hi = wp.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (charPos < wp[mid].s) hi = mid - 1;
+    else if (charPos >= wp[mid].e) lo = mid + 1;
+    else return mid;
+  }
+  return Math.max(0, lo - 1); // in whitespace — return nearest preceding word
+};
+// Binary search: largest index i where sortedArr[i] <= val
+const bsearchNum = (arr, val) => {
+  let lo = 0, hi = arr.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] <= val) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return Math.max(0, lo - 1);
+};
+// Return char offset of each word start within a chunk string
+const wordOffsetsIn = ch => {
+  const offs = [];
+  const re = /\S+/g;
+  let m;
+  while ((m = re.exec(ch)) !== null) offs.push(m.index);
+  return offs;
+};
 const K = {
   lib: "bl:lib",
   text: id => `bl:tx:${id}`,
@@ -2205,6 +2234,7 @@ function App() {
   const playFromR = useRef(null);
   const doCmdR = useRef(null);
   const pageIdxR = useRef(0);
+  const rafR = useRef(null);
   const apiKeyR = useRef('');
   const elR = useRef({});
   const saveT = useRef(null);
@@ -2429,6 +2459,7 @@ function App() {
     stopFlagR.current = true;
     window.speechSynthesis.cancel();
     clearInterval(wordTimerR.current);
+    if (rafR.current) { cancelAnimationFrame(rafR.current); rafR.current = null; }
     if (audioElR.current) {
       audioElR.current.pause();
       audioElR.current = null;
@@ -2467,7 +2498,7 @@ function App() {
       fired = true;
       sBOk(true);
       const abs = offR.current + e.charIndex;
-      const wi = wpR.current.findIndex(w => abs >= w.s && abs < w.e);
+      const wi = bsearchWord(wpR.current, abs);
       if (wi >= 0) {
         sWIdx(wi);
         wR.current = wi;
@@ -2512,13 +2543,9 @@ function App() {
     // Map chunks back to absolute word indices
     let wordOffset = idx;
     const chunkMeta = chunks.map(ch => {
-      const wc = ch.trim().split(/\s+/).filter(Boolean).length;
-      const meta = {
-        text: ch,
-        wordStart: wordOffset,
-        wordCount: wc
-      };
-      wordOffset += wc;
+      const wordOffsets = wordOffsetsIn(ch);
+      const meta = { text: ch, wordStart: wordOffset, wordCount: wordOffsets.length, wordOffsets };
+      wordOffset += wordOffsets.length;
       return meta;
     });
     sPlay(true);
@@ -2559,23 +2586,29 @@ function App() {
         }
         await new Promise((resolve, reject) => {
           audio.addEventListener("loadedmetadata", () => {
-            const wps = chunk.wordCount / audio.duration;
-            clearInterval(wordTimerR.current);
-            wordTimerR.current = setInterval(() => {
-              if (!plR.current) return;
-              const wi = Math.min(chunk.wordStart + Math.floor(audio.currentTime * audio.playbackRate * wps), chunk.wordStart + chunk.wordCount - 1);
-              sWIdx(wi);
-              wR.current = wi;
-              if (acR.current?.id && wi % 8 === 0) saveProg(acR.current.id, wi);
-            }, 120);
+            const cps = chunk.text.length / audio.duration; // chars per second
+            const tick = () => {
+              if (!plR.current || audio.paused || audio.ended) return;
+              const charPos = audio.currentTime * audio.playbackRate * cps;
+              const wordInChunk = bsearchNum(chunk.wordOffsets, charPos);
+              const wi = Math.min(chunk.wordStart + wordInChunk, chunk.wordStart + chunk.wordCount - 1);
+              if (wi !== wR.current) {
+                sWIdx(wi);
+                wR.current = wi;
+                if (acR.current?.id && wi % 8 === 0) saveProg(acR.current.id, wi);
+              }
+              rafR.current = requestAnimationFrame(tick);
+            };
+            rafR.current = requestAnimationFrame(tick);
             audio.play().catch(reject);
           });
           audio.addEventListener("ended", () => {
-            clearInterval(wordTimerR.current);
+            if (rafR.current) { cancelAnimationFrame(rafR.current); rafR.current = null; }
             URL.revokeObjectURL(url);
             resolve();
           });
           audio.addEventListener("error", e => {
+            if (rafR.current) { cancelAnimationFrame(rafR.current); rafR.current = null; }
             URL.revokeObjectURL(url);
             reject(new Error("Audio playback error"));
           });
@@ -2609,13 +2642,9 @@ function App() {
     const chunks = splitChunks(textToRead, 1800);
     let wordOffset = idx;
     const chunkMeta = chunks.map(ch => {
-      const wc = ch.trim().split(/\s+/).filter(Boolean).length;
-      const meta = {
-        text: ch,
-        wordStart: wordOffset,
-        wordCount: wc
-      };
-      wordOffset += wc;
+      const wordOffsets = wordOffsetsIn(ch);
+      const meta = { text: ch, wordStart: wordOffset, wordCount: wordOffsets.length, wordOffsets };
+      wordOffset += wordOffsets.length;
       return meta;
     });
     sPlay(true);
@@ -2659,23 +2688,29 @@ function App() {
         }
         await new Promise((resolve, reject) => {
           audio.addEventListener("loadedmetadata", () => {
-            const wps = chunk.wordCount / audio.duration;
-            clearInterval(wordTimerR.current);
-            wordTimerR.current = setInterval(() => {
-              if (!plR.current) return;
-              const wi = Math.min(chunk.wordStart + Math.floor(audio.currentTime * audio.playbackRate * wps), chunk.wordStart + chunk.wordCount - 1);
-              sWIdx(wi);
-              wR.current = wi;
-              if (acR.current?.id && wi % 8 === 0) saveProg(acR.current.id, wi);
-            }, 120);
+            const cps = chunk.text.length / audio.duration;
+            const tick = () => {
+              if (!plR.current || audio.paused || audio.ended) return;
+              const charPos = audio.currentTime * audio.playbackRate * cps;
+              const wordInChunk = bsearchNum(chunk.wordOffsets, charPos);
+              const wi = Math.min(chunk.wordStart + wordInChunk, chunk.wordStart + chunk.wordCount - 1);
+              if (wi !== wR.current) {
+                sWIdx(wi);
+                wR.current = wi;
+                if (acR.current?.id && wi % 8 === 0) saveProg(acR.current.id, wi);
+              }
+              rafR.current = requestAnimationFrame(tick);
+            };
+            rafR.current = requestAnimationFrame(tick);
             audio.play().catch(reject);
           });
           audio.addEventListener("ended", () => {
-            clearInterval(wordTimerR.current);
+            if (rafR.current) { cancelAnimationFrame(rafR.current); rafR.current = null; }
             URL.revokeObjectURL(url);
             resolve();
           });
           audio.addEventListener("error", () => {
+            if (rafR.current) { cancelAnimationFrame(rafR.current); rafR.current = null; }
             URL.revokeObjectURL(url);
             reject(new Error("Audio playback error"));
           });
